@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import {
   GROUP_ROOT, TOOLS, ID_SUFFIX, MIN_FIREFOX, NAME_RE, VERSION_RE, GECKO_ID_RE, REPO_ENTRIES,
   NOT_EXTENSIONS, exists, isDir, read, discoverFolders, readManifest, manifestReferences, declaredPermissions,
@@ -405,6 +406,74 @@ function lint(f) {
   for (const it of out.notices ?? []) warn(`${f.label}/${it.file ?? 'manifest.json'}`, 'lint', `${it.code}: ${it.message}`);
 }
 
+// Names: one not defined anywhere (a typo, or a helper moved to another file)
+// is a ReferenceError only on the path that reaches it, so the tests can pass
+// without seeing it; one defined and never used is left over. Scripts that
+// Firefox loads together (a content script's js list, the background
+// scripts, the scripts of one page) share their top-level names, so each
+// file is checked with the names its companions define. eslint comes with
+// these tools, not with the extension.
+async function checkNames(f) {
+  const files = walkFiles(f.dir).filter((e) => !e.dir && /\.m?js$/.test(e.rel) && isShippedPath(e.rel)).map((e) => e.rel);
+  if (!files.length) return;
+  let ESLint, globals;
+  try {
+    const req = createRequire(path.join(TOOLS, 'package.json'));
+    ({ ESLint } = req('eslint'));
+    globals = req('globals');
+  } catch {
+    warn(f.label, 'names', 'eslint not found; run `npm install --prefix ../firefox-tools`. Names NOT checked');
+    return;
+  }
+  const parsed = readManifest(f.dir);
+  const m = parsed.ok ? parsed.manifest : {};
+  const clean = (x) => path.normalize(x.replace(/^\//, '').split(/[?#]/)[0]);
+  const groups = [m.background?.scripts ?? [], ...(m.content_scripts ?? []).map((cs) => cs.js ?? [])].map((g) => g.map(clean));
+  for (const e of walkFiles(f.dir).filter((x) => !x.dir && /\.html?$/.test(x.rel) && isShippedPath(x.rel))) {
+    const dir = path.dirname(e.rel);
+    groups.push(htmlReferences(read(path.join(f.dir, e.rel))).filter((r) => r.kind === 'script').map((r) => clean(r.file.startsWith('/') ? r.file : path.join(dir, r.file))));
+  }
+  const text = Object.fromEntries(files.map((x) => [x, read(path.join(f.dir, x))]));
+  // Top-level names, by their declaration at the start of a line, and globalThis.X = …
+  const topNames = (src) => new Set([
+    ...[...src.matchAll(/^(?:(?:const|let|var|class)\s+|(?:async\s+)?function\*?\s+)([A-Za-z_$][\w$]*)/gm)].map((x) => x[1]),
+    ...[...src.matchAll(/^(?:const|let|var)\s+\{([^}]*)\}\s*=/gm)].flatMap((x) => x[1].split(',').map((n) => n.split(':').pop().trim()).filter(Boolean)),
+    ...[...src.matchAll(/\b(?:globalThis|window|self)\.([A-Za-z_$][\w$]*)\s*=[^=]/g)].map((x) => x[1]),
+  ]);
+  const companions = (file) => [...new Set(groups.filter((g) => g.includes(file)).flat())].filter((x) => x !== file && text[x] != null);
+  const languageOptions = (sourceType, extra) => ({
+    ecmaVersion: 2024,
+    sourceType,
+    globals: { ...globals.browser, ...globals.webextensions, cloneInto: 'readonly', exportFunction: 'readonly', XPCNativeWrapper: 'readonly', ...extra },
+  });
+  for (const file of files) {
+    const others = companions(file);
+    const shared = Object.fromEntries(others.flatMap((x) => [...topNames(text[x])]).map((n) => [n, 'writable']));
+    const eslint = new ESLint({
+      cwd: f.dir,
+      overrideConfigFile: true,
+      overrideConfig: [{
+        files: ['**/*.js', '**/*.mjs'],
+        languageOptions: languageOptions(file.endsWith('.mjs') ? 'module' : 'script', shared),
+        rules: {
+          'no-undef': 'error',
+          'no-unused-vars': ['error', { args: 'none', caughtErrors: 'none' }],
+          'no-redeclare': ['error', { builtinGlobals: false }],
+          'no-dupe-keys': 'error',
+          'no-unreachable': 'error',
+        },
+      }],
+    });
+    const [r] = await eslint.lintText(text[file], { filePath: path.join(f.dir, file) });
+    for (const msg of r.messages) {
+      // A top-level name a companion script uses is not unused.
+      const name = /^'([^']+)'/.exec(msg.message)?.[1];
+      if (msg.ruleId === 'no-unused-vars' && name && others.some((x) => new RegExp(`\\b${name.replace(/\$/g, '\\$')}\\b`).test(text[x]))) continue;
+      error(`${f.label}/${file}`, 'names', `${msg.message}${msg.line ? ` (line ${msg.line})` : ''}`);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 
 const folders = discoverFolders();
@@ -412,6 +481,7 @@ const targets = only.size ? folders.filter((x) => only.has(x.name)) : folders;
 for (const n of only) if (!folders.some((x) => x.name === n)) error(n, 'args', 'no such extension');
 if (!only.size) checkGroup();
 for (const fo of targets) (fo.kind === 'extension' ? checkExtension : checkSpecFolder)(fo);
+for (const fo of targets) if (fo.kind === 'extension') await checkNames(fo);
 
 findings.sort((a, b) => (a.level === b.level ? a.file.localeCompare(b.file) : a.level === 'error' ? -1 : 1));
 for (const x of findings) {
