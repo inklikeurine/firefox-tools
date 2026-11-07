@@ -64,7 +64,7 @@ const problems = [];   // { label, title, items[], fix }
     label: 'tests-changed',
     title: 'Existing tests were changed',
     items,
-    fix: 'Pull requests may add tests but not edit or remove existing ones, so a test can\'t be bent to fit broken code. If an existing test really is wrong, explain why in the pull request; the maintainer can allow it with the `tests-changed` label.',
+    fix: 'Pull requests may add tests but not edit or remove existing ones, so a test can\'t be bent to fit broken code. If an existing test really is wrong (behaviour changed on purpose, or a website changed), explain why in the pull request; the maintainer can allow it with the `tests-changed` label. Don\'t work around this by leaving the old test and adding a new one beside it: tests that are repeated or out of date are removed in a test tidy-up pull request (AGENTS.md, Tests).',
   });
 }
 
