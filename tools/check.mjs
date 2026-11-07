@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import {
   GROUP_ROOT, TOOLS, ID_SUFFIX, MIN_FIREFOX, NAME_RE, VERSION_RE, GECKO_ID_RE, REPO_ENTRIES,
   NOT_EXTENSIONS, exists, isDir, read, discoverFolders, readManifest, manifestReferences, declaredPermissions,
@@ -26,8 +27,6 @@ import {
 const argv = process.argv.slice(2);
 const flags = new Set(argv.filter((a) => a.startsWith('--')));
 const only = new Set(argv.filter((a) => !a.startsWith('--')));
-// --no-journal is accepted and ignored: the journal is retired (the pull
-// request carries the verification report now).
 const LINT = !flags.has('--no-lint');
 const QUIET = flags.has('--quiet');
 
@@ -88,11 +87,11 @@ function checkRepoFiles(f) {
   for (const x of ['AGENTS.md', 'README.md', 'UNLICENSE', 'CLAUDE.md', '.gitignore']) {
     if (!exists(at(x))) error(r(x), 'repo-files', 'required file is missing');
   }
-  if (!isDir(at('.git'))) error(f.label, 'repo-files', 'not a git repository; every extension is its own repo');
+  // A folder in a plain clone; a file in a git worktree.
+  if (!exists(at('.git'))) error(f.label, 'repo-files', 'not a git repository; every extension is its own repo');
   if (exists(at('AGENTS.md'))) {
     const agents = read(at('AGENTS.md'));
     if (/__(NAME|DISPLAY_NAME|DESCRIPTION|ID)__/.test(agents)) error(r('AGENTS.md'), 'placeholder', 'template placeholder (__X__) left in file');
-    if (!f.devTool && /^@\.\.\/_workshop\/AGENTS\.md\s*$/m.test(agents)) warn(r('AGENTS.md'), 'repo-files', 'old-style AGENTS.md that imports the private workshop; replace it with firefox-tools/templates/repo/AGENTS.md');
   }
   if (exists(at('CLAUDE.md')) && read(at('CLAUDE.md')).trim() !== '@AGENTS.md') error(r('CLAUDE.md'), 'claude-md', 'must contain exactly "@AGENTS.md"');
   if (exists(at('UNLICENSE'))) {
@@ -156,7 +155,6 @@ function checkFolderCommon(f) {
     if (!exists(path.join(f.dir, 'docs', 'README.md'))) error(`${f.label}/docs/README.md`, 'layout', 'docs/ needs an index README.md');
     if (!exists(path.join(f.dir, 'docs', 'spec.md'))) error(`${f.label}/docs/spec.md`, 'layout', 'docs/spec.md (the product spec) is required');
   }
-  if (fs.readdirSync(f.dir).includes('agents.md')) error(`${f.label}/agents.md`, 'layout', 'lowercase agents.md is retired; the spec lives in docs/spec.md, the rules in AGENTS.md');
 }
 
 function checkSpecFolder(f) {
@@ -356,6 +354,26 @@ function checkReadme(f, m) {
   if (!/firefox/i.test(md)) error(prel, 'firefox-only', 'must mention Firefox');
 }
 
+// A test that expects a whole list (every setting, in order) breaks each time
+// an entry is added, and existing tests may only change with the
+// maintainer's label, so agents add a test beside it instead. One test may pin
+// the list on purpose, marked with a `// the whole list` comment inside it.
+const LONG_LIST = /\[\s*(?:(['"`])[^'"`\n]*\1\s*,\s*){6,}(['"`])[^'"`\n]*\2\s*,?\s*\]/g;
+function pinnedLists(src) {
+  const out = [];
+  for (const m of src.matchAll(LONG_LIST)) {
+    const before = src.slice(Math.max(0, m.index - 400), m.index);
+    const call = before.lastIndexOf('T.eq(');
+    if (call < 0 || /;/.test(before.slice(call)) || /\bof\s*$/.test(before)) continue;   // not what a T.eq expects
+    // The marker covers its whole test: from the test's T.run( line to here.
+    const head = src.slice(0, m.index);
+    const test = head.slice(Math.max(head.lastIndexOf('\nT.run('), head.lastIndexOf('\nT.runAsync('), 0));
+    if (/\/\/\s*the whole list/i.test(test)) continue;
+    out.push({ line: head.split('\n').length, items: m[0].split(/['"`]\s*,/).length });
+  }
+  return out;
+}
+
 // tests/: the suites, the hand-made test pages and the live-check settings.
 // The pull request checks run them; here we only make sure they are there and
 // wired to this layout.
@@ -366,9 +384,9 @@ function checkTests(f) {
   const suites = fs.readdirSync(t).filter((x) => x.endsWith('.test.mjs'));
   if (!suites.length) error(tr, 'tests', 'no test suites (tests/*.test.mjs)');
   for (const x of suites) {
-    const src = read(path.join(t, x));
-    if (/from\s+['"](\.\.\/)+harness\/lib\.mjs['"]/.test(src)) error(`${tr}/${x}`, 'tests', 'imports the old workshop harness; import ../../firefox-tools/harness/lib.mjs');
-    if (/harnessDir,\s*'\.\.',\s*'fixtures'/.test(src)) error(`${tr}/${x}`, 'tests', 'reads test pages from the old workshop; use path.join(T.testsDir, \'fixtures\', …) or T.fixture(…)');
+    for (const p of pinnedLists(read(path.join(t, x)))) {
+      warn(`${tr}/${x}:${p.line}`, 'pinned-list', `expects a whole list of ${p.items} entries, so every new entry breaks it; check only the entries this test is about, or mark the one test that pins the list with a "// the whole list" comment`);
+    }
   }
   const hp = path.join(t, 'harness.json');
   if (!exists(hp)) { error(`${tr}/harness.json`, 'tests', 'missing live-check settings (copy firefox-tools/templates/harness.json)'); return; }
@@ -413,6 +431,74 @@ function lint(f) {
   for (const it of out.notices ?? []) warn(`${f.label}/${it.file ?? 'manifest.json'}`, 'lint', `${it.code}: ${it.message}`);
 }
 
+// Names: one not defined anywhere (a typo, or a helper moved to another file)
+// is a ReferenceError only on the path that reaches it, so the tests can pass
+// without seeing it; one defined and never used is left over. Scripts that
+// Firefox loads together (a content script's js list, the background
+// scripts, the scripts of one page) share their top-level names, so each
+// file is checked with the names its companions define. eslint comes with
+// these tools, not with the extension.
+async function checkNames(f) {
+  const files = walkFiles(f.dir).filter((e) => !e.dir && /\.m?js$/.test(e.rel) && isShippedPath(e.rel)).map((e) => e.rel);
+  if (!files.length) return;
+  let ESLint, globals;
+  try {
+    const req = createRequire(path.join(TOOLS, 'package.json'));
+    ({ ESLint } = req('eslint'));
+    globals = req('globals');
+  } catch {
+    warn(f.label, 'names', 'eslint not found; run `npm install --prefix ../firefox-tools`. Names NOT checked');
+    return;
+  }
+  const parsed = readManifest(f.dir);
+  const m = parsed.ok ? parsed.manifest : {};
+  const clean = (x) => path.normalize(x.replace(/^\//, '').split(/[?#]/)[0]);
+  const groups = [m.background?.scripts ?? [], ...(m.content_scripts ?? []).map((cs) => cs.js ?? [])].map((g) => g.map(clean));
+  for (const e of walkFiles(f.dir).filter((x) => !x.dir && /\.html?$/.test(x.rel) && isShippedPath(x.rel))) {
+    const dir = path.dirname(e.rel);
+    groups.push(htmlReferences(read(path.join(f.dir, e.rel))).filter((r) => r.kind === 'script').map((r) => clean(r.file.startsWith('/') ? r.file : path.join(dir, r.file))));
+  }
+  const text = Object.fromEntries(files.map((x) => [x, read(path.join(f.dir, x))]));
+  // Top-level names, by their declaration at the start of a line, and globalThis.X = …
+  const topNames = (src) => new Set([
+    ...[...src.matchAll(/^(?:(?:const|let|var|class)\s+|(?:async\s+)?function\*?\s+)([A-Za-z_$][\w$]*)/gm)].map((x) => x[1]),
+    ...[...src.matchAll(/^(?:const|let|var)\s+\{([^}]*)\}\s*=/gm)].flatMap((x) => x[1].split(',').map((n) => n.split(':').pop().trim()).filter(Boolean)),
+    ...[...src.matchAll(/\b(?:globalThis|window|self)\.([A-Za-z_$][\w$]*)\s*=[^=]/g)].map((x) => x[1]),
+  ]);
+  const companions = (file) => [...new Set(groups.filter((g) => g.includes(file)).flat())].filter((x) => x !== file && text[x] != null);
+  const languageOptions = (sourceType, extra) => ({
+    ecmaVersion: 2024,
+    sourceType,
+    globals: { ...globals.browser, ...globals.webextensions, cloneInto: 'readonly', exportFunction: 'readonly', XPCNativeWrapper: 'readonly', ...extra },
+  });
+  for (const file of files) {
+    const others = companions(file);
+    const shared = Object.fromEntries(others.flatMap((x) => [...topNames(text[x])]).map((n) => [n, 'writable']));
+    const eslint = new ESLint({
+      cwd: f.dir,
+      overrideConfigFile: true,
+      overrideConfig: [{
+        files: ['**/*.js', '**/*.mjs'],
+        languageOptions: languageOptions(file.endsWith('.mjs') ? 'module' : 'script', shared),
+        rules: {
+          'no-undef': 'error',
+          'no-unused-vars': ['error', { args: 'none', caughtErrors: 'none' }],
+          'no-redeclare': ['error', { builtinGlobals: false }],
+          'no-dupe-keys': 'error',
+          'no-unreachable': 'error',
+        },
+      }],
+    });
+    const [r] = await eslint.lintText(text[file], { filePath: path.join(f.dir, file) });
+    for (const msg of r.messages) {
+      // A top-level name a companion script uses is not unused.
+      const name = /^'([^']+)'/.exec(msg.message)?.[1];
+      if (msg.ruleId === 'no-unused-vars' && name && others.some((x) => new RegExp(`\\b${name.replace(/\$/g, '\\$')}\\b`).test(text[x]))) continue;
+      error(`${f.label}/${file}`, 'names', `${msg.message}${msg.line ? ` (line ${msg.line})` : ''}`);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 
 const folders = discoverFolders();
@@ -420,6 +506,7 @@ const targets = only.size ? folders.filter((x) => only.has(x.name)) : folders;
 for (const n of only) if (!folders.some((x) => x.name === n)) error(n, 'args', 'no such extension');
 if (!only.size) checkGroup();
 for (const fo of targets) (fo.kind === 'extension' ? checkExtension : checkSpecFolder)(fo);
+for (const fo of targets) if (fo.kind === 'extension') await checkNames(fo);
 
 findings.sort((a, b) => (a.level === b.level ? a.file.localeCompare(b.file) : a.level === 'error' ? -1 : 1));
 for (const x of findings) {

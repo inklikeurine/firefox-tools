@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // "Your new tests must fail without your change": runs a pull request's new
-// or changed test suites against the base branch's code. At least one of them
-// must fail there; if none do, they don't test the change.
+// or changed test suites against the base branch's code, and lists each new
+// or changed test with how it did there. At least one must fail there; if
+// none do, they don't test the change. Those that pass there are named too,
+// so the pull request can say why each is needed.
 //
 //   node ../firefox-tools/tools/fail-first.mjs <name> <base-sha>
 //
@@ -20,7 +22,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { GROUP_ROOT, TOOLS, findFolder, isShippedPath } from './lib/extension.mjs';
+import { GROUP_ROOT, TOOLS, SUITE_TIMEOUT_MS, exists, findFolder, isShippedPath } from './lib/extension.mjs';
 
 const [name, base] = process.argv.slice(2);
 if (!name || !base) { console.error('usage: fail-first.mjs <name> <base-sha>'); process.exit(2); }
@@ -34,6 +36,7 @@ function git(...args) {
   return r.stdout;
 }
 const lines = (s) => s.split('\n').filter(Boolean);
+const tryGit = (...args) => { try { return git(...args); } catch { return null; } };
 const report = (text, code) => {
   console.log(text);
   if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## New tests fail without the change\n\n${text}\n`);
@@ -71,6 +74,16 @@ if (!suites.length) {
   ].join('\n'), 1);
 }
 
+// One block per test: from a line that starts T.run(, T.runAsync( or T.skip(
+// to the next. A block whose text is not in the base branch's copy of the
+// suite is a new or changed test. Tests made in a loop don't split this way;
+// such a suite is judged as a whole.
+const blocksOf = (src) => {
+  const lines = src.split('\n').filter((l) => !/^await T\.exit\(\);?\s*$/.test(l));
+  const starts = lines.flatMap((l, i) => (/^T\.(run|runAsync|skip)\(/.test(l) ? [i] : []));
+  return starts.map((st, k) => lines.slice(st, starts[k + 1] ?? lines.length).join('\n').trim());
+};
+
 // The base branch's code, with this pull request's tests/ dropped in. It sits
 // beside firefox-tools so the suites' ../../firefox-tools/ imports still work.
 const tmp = path.join(GROUP_ROOT, `.fail-first-${name}`);
@@ -86,16 +99,28 @@ try {
   fs.cpSync(path.join(f.dir, 'tests'), path.join(tmp, 'tests'), { recursive: true });
   const harnessDir = path.join(TOOLS, 'harness');
   results = suites.map((s) => {
-    const r = spawnSync(process.execPath, [path.join(tmp, 'tests', s), tmp, harnessDir, path.join(tmp, 'tests')], { encoding: 'utf8', timeout: 60000 });
+    const resultsFile = path.join(tmp, `.results-${s}.json`);
+    const r = spawnSync(process.execPath, [path.join(tmp, 'tests', s), tmp, harnessDir, path.join(tmp, 'tests')], { encoding: 'utf8', timeout: SUITE_TIMEOUT_MS, env: { ...process.env, HARNESS_RESULTS: resultsFile } });
     const summary = (r.stdout.match(/^--- .*$/m) ?? [`exit ${r.status}`])[0].replace(/^--- /, '');
-    return { suite: s, fails: r.status !== 0, summary };
+    const ran = exists(resultsFile) ? JSON.parse(fs.readFileSync(resultsFile, 'utf8')) : null;
+    const head = blocksOf(fs.readFileSync(path.join(f.dir, 'tests', s), 'utf8'));
+    const baseText = tryGit('show', `${from}:tests/${s}`);
+    const base = new Set(baseText == null ? [] : blocksOf(baseText));
+    // Without one result per block (a crash, or tests made in a loop), the suite counts as one.
+    if (!ran || ran.length !== head.length) return { suite: s, fails: r.status !== 0, summary, tests: null };
+    const tests = head.flatMap((b, i) => (base.has(b) ? [] : [{ name: ran[i].name, fails: ran[i].ok === false }]));
+    return { suite: s, fails: tests.some((t) => t.fails), summary, tests };
   });
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
-const out = results.map((r) => `  - ${r.suite} on the base branch's code: ${r.fails ? 'fails' : 'passes'} (${r.summary})`);
-if (results.some((r) => r.fails)) report(['PASS  At least one new or changed test fails without this change, so it tests the change.', ...out].join('\n'), 0);
+const out = results.flatMap((r) => (r.tests
+  ? [`  - ${r.suite}, on the base branch's code:`, ...r.tests.map((t) => `      ${t.fails ? 'fails ' : 'PASSES'}  ${t.name}`)]
+  : [`  - ${r.suite} on the base branch's code: ${r.fails ? 'fails' : 'passes'} (${r.summary}), judged as a whole`]));
+const idle = results.flatMap((r) => (r.tests ?? []).filter((t) => !t.fails));
+const note = idle.length ? [`  ${idle.length} new or changed test(s) pass on the base branch's code too ("PASSES" above): they don't test this change. Say in the pull request why each is needed, or remove it.`] : [];
+if (results.some((r) => r.fails)) report(['PASS  At least one new or changed test fails without this change, so it tests the change.', ...out, ...note].join('\n'), 0);
 report([
   'FAIL  None of this pull request\'s new or changed tests fail on the base branch\'s code, so they don\'t test the change.',
   ...out,

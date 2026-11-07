@@ -57,7 +57,7 @@ Then, from this repository's folder:
 
 | Command | What it does |
 |---|---|
-| `node ../firefox-tools/tools/check.mjs __NAME__` | **Validate**: file layout, `manifest.json`, README sections, every `.js` file parses, no forbidden code, and `web-ext lint` (Mozilla's own checker) |
+| `node ../firefox-tools/tools/check.mjs __NAME__` | **Validate**: file layout, `manifest.json`, README sections, every `.js` file parses, no undefined or unused names, no forbidden code, and `web-ext lint` (Mozilla's own checker) |
 | `node ../firefox-tools/harness/run.mjs __NAME__ --tests` | **Tests**: the suites in `tests/`, run without a browser. Fast; run these often |
 | `node ../firefox-tools/harness/run.mjs __NAME__ --spec` | **Tests and live check**: the tests, then installs the extension into a hidden Firefox, opens the test pages and runs the checks in `tests/harness.json` |
 
@@ -129,14 +129,30 @@ checks guard the tests themselves:
   fail if any existing line in `tests/` is removed or changed. If an existing
   test really is wrong (for example, a website changed), explain why in the
   pull request. Only the maintainer can allow it, by adding the
-  `tests-changed` label.
+  `tests-changed` label. When behaviour changes on purpose, don't leave the
+  old test standing beside a new one: say in the pull request which existing
+  tests are now wrong, so they can be changed with the label or removed in
+  the next test tidy-up.
 - **Your new tests must fail without your change.** The checks run your
-  pull request's tests against the code on `main`. If none of them fail
-  there, they aren't testing your change, and the check fails. A change to
+  pull request's tests against the code on `main` and list each new or
+  changed test. If none of them fail there, they aren't testing your change,
+  and the check fails. Any that pass there too are named: say in the pull
+  request why each is needed, or leave it out. A change to
   shipped code needs at least one such test. If a change really can't have
   one (a clean-up that changes no behaviour, say), explain why in the pull
   request. Only the maintainer can allow it, by adding the `no-test-needed`
   label.
+- **A test checks what it is about.** Check the entries, values or keys the
+  test is about, not a whole list around them, so that adding a setting or a
+  button breaks only the tests about it. One test may pin a whole list on
+  purpose (every setting, in order); mark it with a `// the whole list`
+  comment. The validator warns about any other.
+- **The tests get tidied.** Since a pull request can only add tests, the
+  maintainer asks now and then (with a release, say) for a test tidy-up: a
+  pull request that removes tests that are repeated, cover behaviour that is
+  gone, or test nothing, and says in plain words what each one was and which
+  test still covers it. It changes no shipped code, and needs the
+  `tests-changed` label.
 - **Test pages copy the shape of the real pages.** The pages in
   `tests/fixtures/` are hand-made: the same elements and attributes as the
   real page, filled with made-up data only. No real names, emails or account

@@ -26,6 +26,12 @@
 //   --page-eval <expr>…  evaluated in the fixture page (main world)
 //   --popup-eval <expr>… evaluated in the popup, opened in a tab
 //   --options-eval <e>…  evaluated in the options page, opened in a tab
+//   (harness.json)       each list may also hold named steps:
+//                        { "journey": "Home" } starts a group of steps, and
+//                        { "step": "<what it proves, in plain words>",
+//                          "check": "<expr>" | ["<expr>", …] } is one step:
+//                        its checks run in order and each must be === true.
+//                        A failure names the journey and the step.
 //   --screenshot         screenshot the fixture page (off by default)
 //   --viewport <W>x<H>   the fixture page's window size (default 1280x900);
 //                        in harness.json: "viewport": "2560x1314"
@@ -44,10 +50,11 @@
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { availableParallelism } from 'node:os';
+import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import {
-  GROUP_ROOT, TOOLS, PRIVATE_WORKSHOP, ID_SUFFIX, readManifest, treeSha256, extensionPages, exists, findFolder, testsDirOf,
+  GROUP_ROOT, TOOLS, PRIVATE_WORKSHOP, ID_SUFFIX, SUITE_TIMEOUT_MS, readManifest, treeSha256, extensionPages, exists, findFolder, testsDirOf,
 } from '../tools/lib/extension.mjs';
 import { connectWithRetry, installTemporaryAddon, findAddon, watchAddon, evaluateIn } from './rdp.mjs';
 
@@ -122,6 +129,21 @@ const viewport = { width: Number(viewportMatch[1]), height: Number(viewportMatch
 const outDir = path.join(TOOLS, 'out', name);
 fs.mkdirSync(outDir, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// A list of checks, as harness.json gives it: plain expressions, named steps
+// and journey headings (see the top of this file), in order.
+function stepsOf(list) {
+  const out = [];
+  let journey = null;
+  for (const item of list) {
+    if (typeof item === 'string') out.push({ journey, step: null, checks: [item] });
+    else if (item && typeof item.journey === 'string' && item.check === undefined) journey = item.journey;
+    else if (item && typeof item.step === 'string') out.push({ journey, step: item.step, checks: [].concat(item.check ?? []).map(String) });
+    else out.push({ journey, step: null, checks: [], bad: JSON.stringify(item) });
+  }
+  return out;
+}
+const stepLabel = (st) => [st.journey, st.step].filter(Boolean).join(' › ');
 const stamp = () => new Date().toISOString().slice(11, 23);
 
 // ---------------------------------------------------------------------------
@@ -140,13 +162,22 @@ if (opts.tests) {
   const log = [];
   result.tests.ran = true;
   if (!files.length) { log.push(`no suites in ${path.relative(GROUP_ROOT, testsDir)}`); result.tests.pass = false; result.tests.error = 'no suites'; }
-  for (const f of files) {
-    const t0 = Date.now();
-    const res = spawnSync(process.execPath, [path.join(testsDir, f), extDir, harnessDir, testsDir], { encoding: 'utf8', timeout: 60000 });
-    const ms = Date.now() - t0;
+  // Each suite is its own process, so they run side by side; the report stays in file order.
+  const runs = new Array(files.length);
+  let nextFile = 0;
+  await Promise.all(Array.from({ length: Math.min(files.length, availableParallelism()) }, async () => {
+    while (nextFile < files.length) {
+      const i = nextFile;
+      nextFile += 1;
+      runs[i] = await runSuite(files[i], harnessDir);
+    }
+  }));
+  for (const [i, res] of runs.entries()) {
+    const f = files[i];
     const pass = res.status === 0;
-    result.tests.suites.push({ file: f, pass, ms });
-    log.push(`=== ${f} (${ms} ms) ${pass ? 'PASS' : `FAIL exit ${res.status}`}`, res.stdout.trimEnd(), res.stderr.trimEnd());
+    const why = res.signal ? `FAIL timed out after ${SUITE_TIMEOUT_MS / 1000} s` : `FAIL exit ${res.status}`;
+    result.tests.suites.push({ file: f, pass, ms: res.ms });
+    log.push(`=== ${f} (${res.ms} ms) ${pass ? 'PASS' : why}`, res.stdout.trimEnd(), res.stderr.trimEnd());
   }
   if (result.tests.pass === null) result.tests.pass = result.tests.suites.every((s) => s.pass);
   fs.writeFileSync(path.join(outDir, 'tests.log'), log.filter(Boolean).join('\n') + '\n');
@@ -164,6 +195,18 @@ fs.writeFileSync(path.join(outDir, 'result.json'), JSON.stringify(result, null, 
 console.log(`artifacts: ${path.relative(GROUP_ROOT, outDir)}/`);
 console.log(result.pass ? 'RESULT: PASS' : 'RESULT: FAIL');
 process.exit(result.pass ? 0 : 1);
+
+function runSuite(f, harnessDir) {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const child = spawn(process.execPath, [path.join(testsDir, f), extDir, harnessDir, testsDir], { stdio: ['ignore', 'pipe', 'pipe'], timeout: SUITE_TIMEOUT_MS });
+    const out = { stdout: '', stderr: '' };
+    child.stdout.setEncoding('utf8').on('data', (d) => { out.stdout += d; });
+    child.stderr.setEncoding('utf8').on('data', (d) => { out.stderr += d; });
+    child.on('error', (e) => resolve({ ...out, status: null, signal: null, ms: Date.now() - t0, stderr: `${out.stderr}${e.message}` }));
+    child.on('close', (status, signal) => resolve({ ...out, status, signal, ms: Date.now() - t0 }));
+  });
+}
 
 async function live() {
   const L = result.live;
@@ -333,41 +376,43 @@ async function live() {
     await sleep(opts.wait);
     L.pageLoaded = page.url() === url || page.url().startsWith(url);
 
+    // One list of checks. "sleep <s>" pauses; "press <Key>" is a real key
+    // press, sent by Firefox to whatever has the keyboard focus (the page, the
+    // player's frame, or nothing), unlike page:action.
+    const runSteps = async (kind, list, into, evaluate) => {
+      for (const st of stepsOf(list)) {
+        if (st.bad) { fail(`${kind}: not a check, step or journey: ${st.bad}`); continue; }
+        if (st.step) log(`step ${stepLabel(st)}`);
+        for (const [i, expr] of st.checks.entries()) {
+          const s = /^sleep\s+(\d+(\.\d+)?)$/.exec(expr.trim());
+          if (s) { await sleep(Number(s[1]) * 1000); log(`sleep ${s[1]}s`); continue; }
+          const k = /^press\s+(\S+)$/.exec(expr.trim());
+          if (k) {
+            try { await page.keyboard.press(k[1]); log(`press ${k[1]}`); }
+            catch (e) { fail(`${st.step ? `step "${stepLabel(st)}": ` : ''}press ${k[1]} failed: ${e.message.split('\n')[0]}`); }
+            continue;
+          }
+          let value, ok;
+          try { value = await evaluate(expr); ok = value === true; }
+          catch (e) { value = `threw: ${e.message.split('\n')[0]}`; ok = false; }
+          into.push({ journey: st.journey, step: st.step, expr, ok, value: typeof value === 'object' ? JSON.stringify(value) : String(value) });
+          log(`${kind} ${ok ? 'PASS' : 'FAIL'}: ${expr} => ${into.at(-1).value}`);
+          if (!ok) fail(st.step ? `step "${stepLabel(st)}" failed at check ${i + 1} of ${st.checks.length}: ${expr} => ${into.at(-1).value}` : `${kind} not true: ${expr}`);
+        }
+      }
+    };
+
     // background evals
     if (bg) {
       const fxTab = await evaluateIn(rdp, bg.consoleActor, `const tabs = await browser.tabs.query({}); const t = tabs.find(x => x.url === ${JSON.stringify(url)}) ?? tabs.find(x => x.active); globalThis.__harness = { fixtureTabId: t ? t.id : null, fixtureUrl: ${JSON.stringify(url)}, name: ${JSON.stringify(name)} }; return globalThis.__harness;`).catch((e) => { fail(`harness setup eval failed: ${e.message}`); return null; });
       if (fxTab) log(`fixture tab id ${fxTab.fixtureTabId}`);
-      for (const expr of opts.evals) {
-        const s = /^sleep\s+(\d+(\.\d+)?)$/.exec(expr.trim());
-        if (s) { await sleep(Number(s[1]) * 1000); log(`sleep ${s[1]}s`); continue; }
-        // A real key press, sent by Firefox to whatever has the keyboard focus
-        // (the page, the player's frame, or nothing) — unlike page:action.
-        const k = /^press\s+(\S+)$/.exec(expr.trim());
-        if (k) {
-          try { await page.keyboard.press(k[1]); log(`press ${k[1]}`); }
-          catch (e) { fail(`press ${k[1]} failed: ${e.message.split('\n')[0]}`); }
-          continue;
-        }
-        let value, ok;
-        try { value = await evaluateIn(rdp, bg.consoleActor, `return (${expr});`, opts.timeout); ok = value === true; }
-        catch (e) { value = `threw: ${e.message.split('\n')[0]}`; ok = false; }
-        L.evals.push({ expr, ok, value: typeof value === 'object' ? JSON.stringify(value) : String(value) });
-        log(`eval ${ok ? 'PASS' : 'FAIL'}: ${expr} => ${L.evals.at(-1).value}`);
-        if (!ok) fail(`eval not true: ${expr}`);
-      }
+      await runSteps('eval', opts.evals, L.evals, (expr) => evaluateIn(rdp, bg.consoleActor, `return (${expr});`, opts.timeout));
     } else if (opts.evals.length) {
       fail(`${opts.evals.length} background eval(s) given but no background page to run them in`);
     }
 
     // page evals (main world of the fixture)
-    for (const expr of opts.pageEvals) {
-      let value, ok;
-      try { value = await page.evaluate(`(async () => (${expr}))()`); ok = value === true; }
-      catch (e) { value = `threw: ${e.message.split('\n')[0]}`; ok = false; }
-      L.pageEvals.push({ expr, ok, value: typeof value === 'object' ? JSON.stringify(value) : String(value) });
-      log(`page-eval ${ok ? 'PASS' : 'FAIL'}: ${expr} => ${L.pageEvals.at(-1).value}`);
-      if (!ok) fail(`page eval not true: ${expr}`);
-    }
+    await runSteps('page-eval', opts.pageEvals, L.pageEvals, (expr) => page.evaluate(`(async () => (${expr}))()`));
 
     // popup / options pages, opened as tabs from the background
     for (const [kind, file, evals] of [['popup', pages.popup, opts.popupEvals], ['options', pages.options, opts.optionsEvals]]) {
@@ -383,14 +428,7 @@ async function live() {
         rec.opened = true;
         log(`${kind} opened: ${t.url}`);
         const generic = ['document.readyState === "complete"', 'document.body !== null && document.body.children.length > 0'];
-        for (const expr of [...generic, ...evals]) {
-          let value, ok;
-          try { value = await evaluateIn(rdp, t.consoleActor, `return (${expr});`, opts.timeout); ok = value === true; }
-          catch (e) { value = `threw: ${e.message.split('\n')[0]}`; ok = false; }
-          rec.evals.push({ expr, ok, value: typeof value === 'object' ? JSON.stringify(value) : String(value) });
-          log(`${kind}-eval ${ok ? 'PASS' : 'FAIL'}: ${expr} => ${rec.evals.at(-1).value}`);
-          if (!ok) fail(`${kind} eval not true: ${expr}`);
-        }
+        await runSteps(`${kind}-eval`, [...generic, ...evals], rec.evals, (expr) => evaluateIn(rdp, t.consoleActor, `return (${expr});`, opts.timeout));
       } catch (e) { fail(`${kind} page: ${e.message.split('\n')[0]}`); }
     }
 
