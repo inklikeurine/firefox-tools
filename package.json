@@ -1,0 +1,15 @@
+{
+  "name": "firefox-tools",
+  "private": true,
+  "type": "module",
+  "description": "Shared tools for the inklikeurine Firefox extensions: validator, extension scaffolder, headless-Firefox test runner, templates.",
+  "scripts": {
+    "check": "node tools/check.mjs",
+    "test": "node harness/run.mjs"
+  },
+  "dependencies": {
+    "jsdom": "^29.1.1",
+    "playwright": "^1.63.0",
+    "web-ext": "^10.6.0"
+  }
+}

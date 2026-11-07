@@ -1,0 +1,23 @@
+name: Lint extension
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  web-ext-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install web-ext
+        run: npm install --global web-ext
+
+      # The repository root is the extension; the repo files are not part of it.
+      - name: web-ext lint
+        run: web-ext lint --source-dir . --warnings-as-errors --ignore-files AGENTS.md CLAUDE.md UNLICENSE

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(node ../_workshop/tools/*)",
+      "Bash(node ../_workshop/harness/*)",
+      "Bash(web-ext lint *)",
+      "Bash(web-ext build *)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)"
+    ],
+    "additionalDirectories": ["../_workshop"]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -f \"$CLAUDE_PROJECT_DIR/../_workshop/tools/on-edit.mjs\" ]; then node \"$CLAUDE_PROJECT_DIR/../_workshop/tools/on-edit.mjs\"; fi",
+            "timeout": 60,
+            "statusMessage": "Validating extension…"
+          }
+        ]
+      }
+    ]
+  }
+}

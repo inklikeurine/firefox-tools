@@ -1,0 +1,27 @@
+:root {
+  color-scheme: light dark;
+  --fg: #1c1b22;
+  --bg: #ffffff;
+  --muted: #5b5b66;
+  --accent: #0060df;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #fbfbfe;
+    --bg: #2b2a33;
+    --muted: #cfcfd8;
+    --accent: #00ddff;
+  }
+}
+body {
+  margin: 0;
+  min-width: 280px;
+  font: 14px/1.4 system-ui, sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+}
+.app { padding: 12px 14px; }
+.header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.title { margin: 0; font-size: 15px; font-weight: 600; }
+.toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.hint { margin: 10px 0 0; color: var(--muted); font-size: 13px; }

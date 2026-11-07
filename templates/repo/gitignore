@@ -1,0 +1,42 @@
+# --- AI agent state --------------------------------------------------------
+# .claude/settings.json (hook + permissions) and CLAUDE.md are committed on
+# purpose: a fresh clone keeps its guard rail. Per-user files are not.
+# Tests, fixtures and journals live in the private workshop (../_workshop/).
+.claude/*
+!.claude/settings.json
+CLAUDE.local.md
+.cursor/
+.aider*
+
+# --- Operating system ------------------------------------------------------
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
+*~
+
+# --- Editors / IDEs --------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-workspace
+
+# --- Secrets / env ---------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# --- Misc ------------------------------------------------------------------
+*.log
+*.tmp
+*.bak
+*.orig
+
+# --- Platform: WebExtensions -----------------------------------------------
+# web-ext build output
+web-ext-artifacts/
+*.xpi
+*.zip
+# Node (only if the extension ever needs a build step; tooling lives in the workshop)
+node_modules/

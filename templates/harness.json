@@ -1,0 +1,14 @@
+{
+  "tests": true,
+  "live": true,
+  "fixture": "index",
+  "url": "https://example.com/",
+  "wait": 800,
+  "evals": [
+    "(await browser.tabs.sendMessage(__harness.fixtureTabId, { type: 'getState' })).mark === 'on'"
+  ],
+  "popupEvals": [
+    "document.getElementById('statusText').textContent === 'On'"
+  ],
+  "screenshot": false
+}
