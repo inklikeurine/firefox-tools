@@ -72,6 +72,13 @@ The maintainer can allow each of those with a label on the pull request:
 | `rules-changed` | changes to the checks or the AI tools' files |
 | `no-test-needed` | a change to shipped code with no test that fails without it |
 
+## Checks on this repository
+
+A change here changes every extension's checks, so this repository's own
+`checks.yml` runs each public extension's validator, tests and live check
+(against that extension's `main`) with the tools from the pull request.
+Dependabot's updates go through it too: merge one only when it's green.
+
 ## The live check
 
 What `harness/run.mjs <name> --live` does, and all it does:
