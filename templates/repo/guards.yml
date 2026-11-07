@@ -1,0 +1,50 @@
+name: Guards
+
+# Rules a pull request must not be able to switch off: no editing existing
+# tests, no new permissions or web addresses, no changes to the files that
+# control the checks or the maintainer's AI tools, each unless the maintainer
+# allows it with a label (tests-changed, new-access, rules-changed).
+#
+# pull_request_target runs THIS file as it is on main, not the pull request's
+# copy, so a pull request can't edit the guards away. In exchange it must
+# never run the pull request's code: the pull request is checked out only to
+# be read, and the guard script comes from firefox-tools.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  guards:
+    name: Guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: __NAME__
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/checkout@v7
+        with:
+          repository: inklikeurine/firefox-tools
+          path: firefox-tools
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+
+      # No npm install: the guard script has no dependencies.
+      - name: Check what the pull request changes
+        working-directory: __NAME__
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: node ../firefox-tools/tools/pr-guards.mjs "$BASE_SHA"

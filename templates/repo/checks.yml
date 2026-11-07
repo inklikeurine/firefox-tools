@@ -1,0 +1,66 @@
+name: Checks
+
+# Every push to main and every pull request: the validator, the tests and the
+# live check in a hidden Firefox, and, on pull requests, proof that the new
+# tests fail without the change. The shared tools come from
+# github.com/inklikeurine/firefox-tools, checked out beside this repository
+# exactly as on a developer's computer.
+#
+# This runs the pull request's code, so it gets no secrets and can't write to
+# the repository. The guards that a pull request must not be able to switch
+# off are in guards.yml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    # labeled/unlabeled: re-run when the maintainer adds `no-test-needed`.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Validate and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: __NAME__
+          fetch-depth: 0          # history and release tags, for the version check
+
+      - uses: actions/checkout@v7
+        with:
+          repository: inklikeurine/firefox-tools
+          path: firefox-tools
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+
+      - name: Install the shared tools
+        run: |
+          npm ci --prefix firefox-tools
+          npx --prefix firefox-tools playwright install --with-deps firefox
+
+      - name: Validate
+        working-directory: __NAME__
+        run: node ../firefox-tools/tools/check.mjs __NAME__
+
+      - name: Tests and live check
+        working-directory: __NAME__
+        run: node ../firefox-tools/harness/run.mjs __NAME__ --spec
+
+      - name: New tests fail without the change
+        if: github.event_name == 'pull_request'
+        working-directory: __NAME__
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: node ../firefox-tools/tools/fail-first.mjs __NAME__ "$BASE_SHA"
+
+      - name: Show the test logs
+        if: failure()
+        run: cat firefox-tools/out/__NAME__/*.log 2>/dev/null || true

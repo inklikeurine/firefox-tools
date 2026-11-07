@@ -48,6 +48,30 @@ How to run the checks for one extension is in that extension's `AGENTS.md`.
 The tools find an extension by its folder name: `check.mjs volume-boost`
 checks `../volume-boost/`.
 
+## Pull request checks
+
+Each extension has two workflows, copied from `templates/repo/`:
+
+- **`checks.yml`: Validate and test.** Runs the validator, the tests and the
+  live check on every push to `main` and every pull request. On a pull
+  request it also runs `tools/fail-first.mjs`: the pull request's new or
+  changed test suites must fail against the code on `main`, or they don't
+  test the change.
+- **`guards.yml`: Guards.** Runs `tools/pr-guards.mjs`, which only reads the
+  change. GitHub runs this workflow as it is on `main`, so a pull request
+  can't edit it away. It fails when a pull request edits or removes an
+  existing test, adds a permission, a page the extension runs on or a web
+  address, or changes `.github/`, `.claude/`, `AGENTS.md` or `CLAUDE.md`.
+
+The maintainer can allow each of those with a label on the pull request:
+
+| Label | Allows |
+|---|---|
+| `tests-changed` | editing or removing existing tests |
+| `new-access` | new permissions, pages or web addresses |
+| `rules-changed` | changes to the checks or the AI tools' files |
+| `no-test-needed` | a change to shipped code with no test that fails without it |
+
 ## The live check
 
 What `harness/run.mjs <name> --live` does, and all it does:
