@@ -77,6 +77,8 @@ export const T = {
     const passed = results.filter((r) => r.ok === true).length;
     const skipped = results.filter((r) => r.ok === null).length;
     console.log(`--- ${passed} passed, ${failed} failed, ${skipped} skipped`);
+    // For tools/fail-first.mjs: each test's outcome, in the order registered.
+    if (process.env.HARNESS_RESULTS) fs.writeFileSync(process.env.HARNESS_RESULTS, JSON.stringify(results));
     process.exit(failed ? 1 : 0);
   },
 };
