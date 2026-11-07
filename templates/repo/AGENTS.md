@@ -44,7 +44,7 @@ install. Everything is shipped except `README.md`, `CHANGELOG.md`, `docs/`,
 
 ## Checking your work
 
-You need Node.js 20 or newer. Once, put the shared tools next to this
+You need Node.js 22.22 or newer. Once, put the shared tools next to this
 repository:
 
 ```sh

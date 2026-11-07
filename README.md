@@ -21,7 +21,7 @@ AI tools) how to run them first.
 
 ## Setup
 
-Needs Node.js 20 or newer. Clone this repository next to the extension
+Needs Node.js 22.22 or newer (jsdom, which the tests run in, requires it). Clone this repository next to the extension
 repositories, so each extension can reach it as `../firefox-tools`:
 
 ```sh
