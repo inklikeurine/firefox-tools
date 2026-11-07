@@ -44,10 +44,11 @@
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { availableParallelism } from 'node:os';
+import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import {
-  GROUP_ROOT, TOOLS, PRIVATE_WORKSHOP, ID_SUFFIX, readManifest, treeSha256, extensionPages, exists, findFolder, testsDirOf,
+  GROUP_ROOT, TOOLS, PRIVATE_WORKSHOP, ID_SUFFIX, SUITE_TIMEOUT_MS, readManifest, treeSha256, extensionPages, exists, findFolder, testsDirOf,
 } from '../tools/lib/extension.mjs';
 import { connectWithRetry, installTemporaryAddon, findAddon, watchAddon, evaluateIn } from './rdp.mjs';
 
@@ -140,13 +141,22 @@ if (opts.tests) {
   const log = [];
   result.tests.ran = true;
   if (!files.length) { log.push(`no suites in ${path.relative(GROUP_ROOT, testsDir)}`); result.tests.pass = false; result.tests.error = 'no suites'; }
-  for (const f of files) {
-    const t0 = Date.now();
-    const res = spawnSync(process.execPath, [path.join(testsDir, f), extDir, harnessDir, testsDir], { encoding: 'utf8', timeout: 60000 });
-    const ms = Date.now() - t0;
+  // Each suite is its own process, so they run side by side; the report stays in file order.
+  const runs = new Array(files.length);
+  let nextFile = 0;
+  await Promise.all(Array.from({ length: Math.min(files.length, availableParallelism()) }, async () => {
+    while (nextFile < files.length) {
+      const i = nextFile;
+      nextFile += 1;
+      runs[i] = await runSuite(files[i], harnessDir);
+    }
+  }));
+  for (const [i, res] of runs.entries()) {
+    const f = files[i];
     const pass = res.status === 0;
-    result.tests.suites.push({ file: f, pass, ms });
-    log.push(`=== ${f} (${ms} ms) ${pass ? 'PASS' : `FAIL exit ${res.status}`}`, res.stdout.trimEnd(), res.stderr.trimEnd());
+    const why = res.signal ? `FAIL timed out after ${SUITE_TIMEOUT_MS / 1000} s` : `FAIL exit ${res.status}`;
+    result.tests.suites.push({ file: f, pass, ms: res.ms });
+    log.push(`=== ${f} (${res.ms} ms) ${pass ? 'PASS' : why}`, res.stdout.trimEnd(), res.stderr.trimEnd());
   }
   if (result.tests.pass === null) result.tests.pass = result.tests.suites.every((s) => s.pass);
   fs.writeFileSync(path.join(outDir, 'tests.log'), log.filter(Boolean).join('\n') + '\n');
@@ -164,6 +174,18 @@ fs.writeFileSync(path.join(outDir, 'result.json'), JSON.stringify(result, null, 
 console.log(`artifacts: ${path.relative(GROUP_ROOT, outDir)}/`);
 console.log(result.pass ? 'RESULT: PASS' : 'RESULT: FAIL');
 process.exit(result.pass ? 0 : 1);
+
+function runSuite(f, harnessDir) {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const child = spawn(process.execPath, [path.join(testsDir, f), extDir, harnessDir, testsDir], { stdio: ['ignore', 'pipe', 'pipe'], timeout: SUITE_TIMEOUT_MS });
+    const out = { stdout: '', stderr: '' };
+    child.stdout.setEncoding('utf8').on('data', (d) => { out.stdout += d; });
+    child.stderr.setEncoding('utf8').on('data', (d) => { out.stderr += d; });
+    child.on('error', (e) => resolve({ ...out, status: null, signal: null, ms: Date.now() - t0, stderr: `${out.stderr}${e.message}` }));
+    child.on('close', (status, signal) => resolve({ ...out, status, signal, ms: Date.now() - t0 }));
+  });
+}
 
 async function live() {
   const L = result.live;

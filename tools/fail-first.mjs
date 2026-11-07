@@ -20,7 +20,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { GROUP_ROOT, TOOLS, findFolder, isShippedPath } from './lib/extension.mjs';
+import { GROUP_ROOT, TOOLS, SUITE_TIMEOUT_MS, findFolder, isShippedPath } from './lib/extension.mjs';
 
 const [name, base] = process.argv.slice(2);
 if (!name || !base) { console.error('usage: fail-first.mjs <name> <base-sha>'); process.exit(2); }
@@ -86,7 +86,7 @@ try {
   fs.cpSync(path.join(f.dir, 'tests'), path.join(tmp, 'tests'), { recursive: true });
   const harnessDir = path.join(TOOLS, 'harness');
   results = suites.map((s) => {
-    const r = spawnSync(process.execPath, [path.join(tmp, 'tests', s), tmp, harnessDir, path.join(tmp, 'tests')], { encoding: 'utf8', timeout: 60000 });
+    const r = spawnSync(process.execPath, [path.join(tmp, 'tests', s), tmp, harnessDir, path.join(tmp, 'tests')], { encoding: 'utf8', timeout: SUITE_TIMEOUT_MS });
     const summary = (r.stdout.match(/^--- .*$/m) ?? [`exit ${r.status}`])[0].replace(/^--- /, '');
     return { suite: s, fails: r.status !== 0, summary };
   });

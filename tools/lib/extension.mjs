@@ -27,6 +27,7 @@ export const sourceUrl = repoUrl;            // the README "Source" link
 export const issuesUrl = (name) => `${repoUrl(name)}/issues`;
 
 export const ID_SUFFIX = '@inklikeurine.dev';
+export const SUITE_TIMEOUT_MS = 120000;      // how long one test suite may run
 export const MIN_FIREFOX = '140.0';
 export const NAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 export const VERSION_RE = /^\d+\.\d+\.\d+$/;
