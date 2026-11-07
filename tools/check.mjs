@@ -357,7 +357,7 @@ function checkReadme(f, m) {
 // A test that expects a whole list (every setting, in order) breaks each time
 // an entry is added, and existing tests may only change with the
 // maintainer's label, so agents add a test beside it instead. One test may pin
-// the list on purpose, marked with a `// the whole list` comment.
+// the list on purpose, marked with a `// the whole list` comment inside it.
 const LONG_LIST = /\[\s*(?:(['"`])[^'"`\n]*\1\s*,\s*){6,}(['"`])[^'"`\n]*\2\s*,?\s*\]/g;
 function pinnedLists(src) {
   const out = [];
@@ -365,10 +365,11 @@ function pinnedLists(src) {
     const before = src.slice(Math.max(0, m.index - 400), m.index);
     const call = before.lastIndexOf('T.eq(');
     if (call < 0 || /;/.test(before.slice(call)) || /\bof\s*$/.test(before)) continue;   // not what a T.eq expects
-    const lines = src.slice(0, m.index).split('\n');
-    const near = lines.slice(-2).join('\n');
-    if (/\/\/\s*the whole list/i.test(near)) continue;
-    out.push({ line: lines.length, items: m[0].split(/['"`]\s*,/).length });
+    // The marker covers its whole test: from the test's T.run( line to here.
+    const head = src.slice(0, m.index);
+    const test = head.slice(Math.max(head.lastIndexOf('\nT.run('), head.lastIndexOf('\nT.runAsync('), 0));
+    if (/\/\/\s*the whole list/i.test(test)) continue;
+    out.push({ line: head.split('\n').length, items: m[0].split(/['"`]\s*,/).length });
   }
   return out;
 }
