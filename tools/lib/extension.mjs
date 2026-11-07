@@ -1,4 +1,4 @@
-// Shared constants and helpers for the Firefox extension workshop.
+// Shared constants and helpers for the Firefox extension tools.
 // Zero dependencies. Imported by tools/check.mjs, tools/new-extension.mjs,
 // tools/on-edit.mjs and harness/run.mjs.
 
@@ -7,14 +7,17 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 
-// Layout (AGENTS.md → "Layout"): the workshop is ~/src/firefox/_workshop/ and
-// every extension is its own git repo beside it, ~/src/firefox/<name>/, whose
-// root is the extension folder plus the repo files. Development-only
-// extensions (dev tools) are private repos nested inside the workshop,
-// ~/src/firefox/_workshop/<name>/, ignored by the workshop's own git.
-// _workshop/tools/lib/extension.mjs → the workshop is two levels up.
-export const WORKSHOP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-export const GROUP_ROOT = path.resolve(WORKSHOP, '..');
+// Layout: these tools are a git repo (firefox-tools) beside the extension
+// repos, e.g. ~/src/firefox/firefox-tools/ next to ~/src/firefox/<name>/.
+// Each extension repo's root is the folder Firefox loads, plus the repo files
+// and tests/ (its test suites, test pages and live-check settings).
+// The maintainer's private workshop, if present, is ~/src/firefox/_workshop/;
+// development-only extensions (dev tools) are private repos nested in it,
+// ~/src/firefox/_workshop/<name>/.
+// firefox-tools/tools/lib/extension.mjs → the tools repo is two levels up.
+export const TOOLS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+export const GROUP_ROOT = path.resolve(TOOLS, '..');
+export const PRIVATE_WORKSHOP = path.join(GROUP_ROOT, '_workshop');
 
 export const OWNER = 'inklikeurine';
 export const REPO_PREFIX = 'firefox-';        // extension <name> lives in github.com/<OWNER>/firefox-<name>
@@ -30,17 +33,21 @@ export const VERSION_RE = /^\d+\.\d+\.\d+$/;
 export const GECKO_ID_RE = /^[a-z0-9]+(-[a-z0-9]+)*@inklikeurine\.dev$/;
 
 // Folders in the group root that are never extension repos.
-export const NOT_EXTENSIONS = new Set(['_workshop', 'node_modules']);
+export const NOT_EXTENSIONS = new Set(['_workshop', 'node_modules', 'firefox-tools', path.basename(TOOLS)]);
 
 // Repo-level entries at an extension repo's root. Like DOC_ENTRIES they are
 // never shipped and never part of the tree hash; unlike them they are
 // required (AGENTS.md → "Required repo files").
 export const REPO_ENTRIES = new Set(['AGENTS.md', 'CLAUDE.md', 'UNLICENSE', '.gitignore', '.claude', '.github', '.git']);
 
-// Files/folders inside an extension folder that are documentation, not
-// shipped code. Changing only these never bumps `version`, and they are
-// excluded from the tree hash the harness records.
-export const DOC_ENTRIES = new Set(['README.md', 'CHANGELOG.md', 'docs']);
+// Files/folders inside an extension folder that are never shipped:
+// documentation and tests. They are left out of the signed extension, the
+// shipped-code checks and the tree hash the harness records.
+export const NOT_SHIPPED = new Set(['README.md', 'CHANGELOG.md', 'docs', 'tests']);
+/** True for a path (relative to the extension root) that goes into the signed extension. */
+export const isShippedPath = (rel) => !NOT_SHIPPED.has(rel.split('/')[0]) && !REPO_ENTRIES.has(rel.split('/')[0]);
+/** Where an extension's tests live: tests/ in its own repo. */
+export const testsDirOf = (dir) => path.join(dir, 'tests');
 export const IGNORED_ENTRIES = new Set(['web-ext-artifacts', '.DS_Store', 'Thumbs.db']);
 
 export const exists = (p) => fs.existsSync(p);
@@ -59,9 +66,11 @@ export function discoverFolders() {
     const dir = path.join(GROUP_ROOT, ent.name);
     out.push(folder(dir, exists(path.join(dir, 'manifest.json')) ? 'extension' : 'spec', false));
   }
-  for (const ent of fs.readdirSync(WORKSHOP, { withFileTypes: true })) {
-    const dir = path.join(WORKSHOP, ent.name);
-    if (ent.isDirectory() && exists(path.join(dir, '.git')) && exists(path.join(dir, 'manifest.json'))) out.push(folder(dir, 'extension', true));
+  if (isDir(PRIVATE_WORKSHOP)) {
+    for (const ent of fs.readdirSync(PRIVATE_WORKSHOP, { withFileTypes: true })) {
+      const dir = path.join(PRIVATE_WORKSHOP, ent.name);
+      if (ent.isDirectory() && exists(path.join(dir, '.git')) && exists(path.join(dir, 'manifest.json'))) out.push(folder(dir, 'extension', true));
+    }
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -69,8 +78,6 @@ export function discoverFolders() {
 /** One folder by name, or undefined. */
 export const findFolder = (name) => discoverFolders().find((f) => f.name === name);
 
-/** The line an extension repo's AGENTS.md uses to import the workshop rules. */
-export const agentsImport = (f) => (f.devTool ? '@../AGENTS.md' : '@../_workshop/AGENTS.md');
 
 export function readManifest(dir) {
   const p = path.join(dir, 'manifest.json');
@@ -88,7 +95,7 @@ export function shippedFiles(dir) {
   const walk = (d, prefix) => {
     for (const ent of fs.readdirSync(d, { withFileTypes: true })) {
       if (IGNORED_ENTRIES.has(ent.name)) continue;
-      if (prefix === '' && (DOC_ENTRIES.has(ent.name) || REPO_ENTRIES.has(ent.name))) continue;
+      if (prefix === '' && (NOT_SHIPPED.has(ent.name) || REPO_ENTRIES.has(ent.name))) continue;
       const relPath = prefix ? `${prefix}/${ent.name}` : ent.name;
       if (ent.isDirectory()) walk(path.join(d, ent.name), relPath);
       else out.push(relPath);

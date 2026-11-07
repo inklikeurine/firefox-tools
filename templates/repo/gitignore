@@ -1,7 +1,7 @@
 # --- AI agent state --------------------------------------------------------
 # .claude/settings.json (hook + permissions) and CLAUDE.md are committed on
 # purpose: a fresh clone keeps its guard rail. Per-user files are not.
-# Tests, fixtures and journals live in the private workshop (../_workshop/).
+# Tests live in tests/; the shared tools in ../firefox-tools/.
 .claude/*
 !.claude/settings.json
 CLAUDE.local.md
