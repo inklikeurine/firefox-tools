@@ -5,7 +5,8 @@
   "url": "https://example.com/",
   "wait": 800,
   "evals": [
-    "(await browser.tabs.sendMessage(__harness.fixtureTabId, { type: 'getState' })).mark === 'on'"
+    { "journey": "The test page" },
+    { "step": "the content script marks the page", "check": "(await browser.tabs.sendMessage(__harness.fixtureTabId, { type: 'getState' })).mark === 'on'" }
   ],
   "popupEvals": [
     "document.getElementById('statusText').textContent === 'On'"

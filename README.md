@@ -84,7 +84,12 @@ What `harness/run.mjs <name> --live` does, and all it does:
 4. Serves the test page named in `tests/harness.json` at the address given
    there, with the network otherwise blocked, and opens it.
 5. Runs each check (`evals`) inside the background page. Each must return
-   `true`.
+   `true`. Checks are best written as named steps grouped by journey, so a
+   failure says what broke:
+   `{ "journey": "Home" }`, then
+   `{ "step": "the banner's Watch now is selected first", "check": ["…", "…"] }`.
+   A step's checks run in order. Keep to what only a real Firefox can show;
+   the headless tests cover the rest.
 6. Opens the popup and options page, if the extension has them, and runs
    their checks (`popupEvals`, `optionsEvals`).
 7. Fails on any error from the extension, any uncaught error on the test page
