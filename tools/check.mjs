@@ -115,8 +115,9 @@ function checkRepoFiles(f) {
   }
   // CI: the full checks workflow (checks.yml), or the older lint-only one.
   const ci = ['checks.yml', 'lint.yml'].map((w) => at('.github', 'workflows', w)).find(exists);
-  if (!ci) error(r('.github/workflows/'), 'ci', 'a checks workflow is required (copy firefox-tools/templates/repo/lint.yml)');
+  if (!ci) error(r('.github/workflows/'), 'ci', 'a checks workflow is required (copy firefox-tools/templates/repo/checks.yml)');
   else if (!/web-ext lint|check\.mjs/.test(read(ci))) error(r(`.github/workflows/${path.basename(ci)}`), 'ci', 'workflow must run web-ext lint or check.mjs');
+  if (!f.devTool && !exists(at('.github', 'workflows', 'guards.yml'))) warn(r('.github/workflows/guards.yml'), 'ci', 'the pull request guards are missing (copy firefox-tools/templates/repo/guards.yml)');
   for (const x of ['package.json', 'package-lock.json', '.eslintrc', '.eslintrc.json', 'eslint.config.js', '.prettierrc', 'tsconfig.json', 'web-ext-config.js', 'web-ext-config.mjs']) {
     if (exists(at(x))) error(r(x), 'no-tooling-at-root', 'AGENTS.md forbids build/lint config in an extension repo; tooling lives in firefox-tools/');
   }

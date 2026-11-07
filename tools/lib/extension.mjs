@@ -33,7 +33,7 @@ export const VERSION_RE = /^\d+\.\d+\.\d+$/;
 export const GECKO_ID_RE = /^[a-z0-9]+(-[a-z0-9]+)*@inklikeurine\.dev$/;
 
 // Folders in the group root that are never extension repos.
-export const NOT_EXTENSIONS = new Set(['_workshop', 'node_modules', 'firefox-tools', path.basename(TOOLS)]);
+export const NOT_EXTENSIONS = new Set(['_workshop', 'node_modules', 'firefox-tools', 'firefox-workshop', path.basename(TOOLS)]);
 
 // Repo-level entries at an extension repo's root. Like DOC_ENTRIES they are
 // never shipped and never part of the tree hash; unlike them they are
@@ -55,7 +55,11 @@ export const isDir = (p) => exists(p) && fs.statSync(p).isDirectory();
 export const read = (p) => fs.readFileSync(p, 'utf8');
 export const rel = (p) => path.relative(GROUP_ROOT, p) || '.';
 
-const folder = (dir, kind, devTool) => ({ name: path.basename(dir), dir, kind, devTool, label: rel(dir) });
+// An extension's name is its folder name. A plain `git clone` names the folder
+// after the GitHub repository (firefox-<name>), so that prefix is dropped:
+// ../firefox-volume-boost/ and ../volume-boost/ are both "volume-boost".
+export const nameOfFolder = (base) => base.replace(/^firefox-/, '');
+const folder = (dir, kind, devTool) => ({ name: nameOfFolder(path.basename(dir)), dir, kind, devTool, label: rel(dir) });
 
 /** Every extension repo (or spec folder) beside the workshop, plus the dev-tool
  *  extensions inside it, sorted by name. */

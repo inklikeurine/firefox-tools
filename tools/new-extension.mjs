@@ -74,7 +74,9 @@ copy('repo/AGENTS.md', path.join(dir, 'AGENTS.md'), { skipIfExists: promote });
 copy('repo/CLAUDE.md', path.join(dir, 'CLAUDE.md'), { skipIfExists: promote });
 copy('repo/gitignore', path.join(dir, '.gitignore'), { skipIfExists: promote });
 copy('repo/claude-settings.json', path.join(dir, '.claude', 'settings.json'), { skipIfExists: promote });
-copy('repo/lint.yml', path.join(dir, '.github', 'workflows', 'lint.yml'), { skipIfExists: promote });
+copy('repo/checks.yml', path.join(dir, '.github', 'workflows', 'checks.yml'), { skipIfExists: promote });
+copy('repo/guards.yml', path.join(dir, '.github', 'workflows', 'guards.yml'), { skipIfExists: promote });
+copy('repo/pull_request_template.md', path.join(dir, '.github', 'pull_request_template.md'), { skipIfExists: promote });
 copy('UNLICENSE', path.join(dir, 'UNLICENSE'), { skipIfExists: promote });
 if (!exists(path.join(dir, '.git'))) {
   const g = spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: dir, encoding: 'utf8' });
