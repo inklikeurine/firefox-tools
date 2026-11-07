@@ -1,0 +1,21 @@
+# Keeps the tools' npm packages current: web-ext (Mozilla's linter and
+# signing tool), Playwright (the hidden Firefox), jsdom, eslint, and
+# everything they pull in.
+#
+# Once a week, Dependabot opens one pull request with every minor and patch
+# update together. A major update (a new version that may change how a tool
+# behaves, like eslint 9 → 10) comes as its own pull request, so it can be
+# checked on its own.
+#
+# Security fixes don't wait for the weekly run: with "Dependabot security
+# updates" turned on in the repository's settings, they arrive as soon as a
+# fix is released.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
