@@ -26,8 +26,6 @@ import {
 const argv = process.argv.slice(2);
 const flags = new Set(argv.filter((a) => a.startsWith('--')));
 const only = new Set(argv.filter((a) => !a.startsWith('--')));
-// --no-journal is accepted and ignored: the journal is retired (the pull
-// request carries the verification report now).
 const LINT = !flags.has('--no-lint');
 const QUIET = flags.has('--quiet');
 
@@ -88,11 +86,11 @@ function checkRepoFiles(f) {
   for (const x of ['AGENTS.md', 'README.md', 'UNLICENSE', 'CLAUDE.md', '.gitignore']) {
     if (!exists(at(x))) error(r(x), 'repo-files', 'required file is missing');
   }
-  if (!isDir(at('.git'))) error(f.label, 'repo-files', 'not a git repository; every extension is its own repo');
+  // A folder in a plain clone; a file in a git worktree.
+  if (!exists(at('.git'))) error(f.label, 'repo-files', 'not a git repository; every extension is its own repo');
   if (exists(at('AGENTS.md'))) {
     const agents = read(at('AGENTS.md'));
     if (/__(NAME|DISPLAY_NAME|DESCRIPTION|ID)__/.test(agents)) error(r('AGENTS.md'), 'placeholder', 'template placeholder (__X__) left in file');
-    if (!f.devTool && /^@\.\.\/_workshop\/AGENTS\.md\s*$/m.test(agents)) warn(r('AGENTS.md'), 'repo-files', 'old-style AGENTS.md that imports the private workshop; replace it with firefox-tools/templates/repo/AGENTS.md');
   }
   if (exists(at('CLAUDE.md')) && read(at('CLAUDE.md')).trim() !== '@AGENTS.md') error(r('CLAUDE.md'), 'claude-md', 'must contain exactly "@AGENTS.md"');
   if (exists(at('UNLICENSE'))) {
@@ -156,7 +154,6 @@ function checkFolderCommon(f) {
     if (!exists(path.join(f.dir, 'docs', 'README.md'))) error(`${f.label}/docs/README.md`, 'layout', 'docs/ needs an index README.md');
     if (!exists(path.join(f.dir, 'docs', 'spec.md'))) error(`${f.label}/docs/spec.md`, 'layout', 'docs/spec.md (the product spec) is required');
   }
-  if (fs.readdirSync(f.dir).includes('agents.md')) error(`${f.label}/agents.md`, 'layout', 'lowercase agents.md is retired; the spec lives in docs/spec.md, the rules in AGENTS.md');
 }
 
 function checkSpecFolder(f) {
@@ -365,11 +362,6 @@ function checkTests(f) {
   if (!isDir(t)) { error(tr, 'tests', 'missing tests/ folder (the test suites, test pages and harness.json); start from firefox-tools/templates/smoke.test.mjs'); return; }
   const suites = fs.readdirSync(t).filter((x) => x.endsWith('.test.mjs'));
   if (!suites.length) error(tr, 'tests', 'no test suites (tests/*.test.mjs)');
-  for (const x of suites) {
-    const src = read(path.join(t, x));
-    if (/from\s+['"](\.\.\/)+harness\/lib\.mjs['"]/.test(src)) error(`${tr}/${x}`, 'tests', 'imports the old workshop harness; import ../../firefox-tools/harness/lib.mjs');
-    if (/harnessDir,\s*'\.\.',\s*'fixtures'/.test(src)) error(`${tr}/${x}`, 'tests', 'reads test pages from the old workshop; use path.join(T.testsDir, \'fixtures\', …) or T.fixture(…)');
-  }
   const hp = path.join(t, 'harness.json');
   if (!exists(hp)) { error(`${tr}/harness.json`, 'tests', 'missing live-check settings (copy firefox-tools/templates/harness.json)'); return; }
   let spec;
