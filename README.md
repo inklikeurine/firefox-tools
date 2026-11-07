@@ -32,12 +32,44 @@ npx --prefix firefox-tools playwright install firefox
 
 How to run the checks for one extension is in that extension's `AGENTS.md`.
 
-## Status
+## Layout
 
-These tools are being moved here from a private workspace. Until that move is
-finished, they still expect the old layout (an `_workshop` folder beside the
-extensions, with each extension's tests inside it), so the commands in the
-new `AGENTS.md` template don't work yet.
+```text
+~/src/firefox/
+├── firefox-tools/          # this repository
+└── <name>/                 # one repository per extension, e.g. volume-boost/
+    ├── manifest.json …     # the extension itself
+    └── tests/
+        ├── *.test.mjs      # test suites, run without a browser
+        ├── fixtures/       # hand-made test pages (made-up data only)
+        └── harness.json    # settings for the live check
+```
+
+The tools find an extension by its folder name: `check.mjs volume-boost`
+checks `../volume-boost/`.
+
+## The live check
+
+What `harness/run.mjs <name> --live` does, and all it does:
+
+1. Starts Playwright's headless Firefox with a throwaway profile. Your own
+   Firefox profile is never touched.
+2. Installs the extension's folder as a temporary add-on, the same way
+   `about:debugging` does.
+3. Waits for the extension's background page and watches its errors.
+4. Serves the test page named in `tests/harness.json` at the address given
+   there, with the network otherwise blocked, and opens it.
+5. Runs each check (`evals`) inside the background page. Each must return
+   `true`.
+6. Opens the popup and options page, if the extension has them, and runs
+   their checks (`popupEvals`, `optionsEvals`).
+7. Fails on any error from the extension, any uncaught error on the test page
+   caused by the extension, or any check that isn't `true`.
+8. Writes logs and `result.json` to `out/<name>/`.
+
+It proves the extension loads, runs without errors, and does what the checks
+assert. It does **not** prove a page looks right, that sound is audible, or
+that Mozilla will accept the extension; a person checks those.
 
 ## License
 

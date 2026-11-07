@@ -1,21 +1,21 @@
 #!/usr/bin/env node
 // Test runner for one extension: headless suites and/or a live check in a
-// real headless Firefox. Writes _workshop/out/<name>/result.json — the evidence
-// check.mjs demands before an "Automated Test" tick.
+// real headless Firefox. Writes firefox-tools/out/<name>/ (logs and
+// result.json) and exits 0 only when everything asked for passed.
 //
-//   node ../_workshop/harness/run.mjs <name> [--spec] [--tests] [--live] [options]
+//   node ../firefox-tools/harness/run.mjs <name> [--spec] [--tests] [--live] [options]
 //
-//   --spec               use _workshop/review/<name>/harness.json (default when
+//   --spec               use <name>/tests/harness.json (default when
 //                        neither --tests nor --live is given); CLI flags win
-//   --tests              run _workshop/tests/<name>/*.test.mjs under node
+//   --tests              run <name>/tests/*.test.mjs under node
 //   --suite <n>          only the suite whose file name contains <n>
 //   --live               install into headless Firefox and drive it (below)
-//   --fixture <n>        serve _workshop/fixtures/<name>/<n>.html as the page
+//   --fixture <n>        serve <name>/tests/fixtures/<n>.html as the page
 //   --url <u>            the URL the fixture is served at (default
 //                        https://fixture.test/<n>.html); with no fixture, a
 //                        real URL to load (network allowed)
 //   --wait <ms>          settle time after the page loads (default 800)
-//   --route <url>=<f>…   also serve _workshop/fixtures/<name>/<f>.html at <url>
+//   --route <url>=<f>…   also serve <name>/tests/fixtures/<f>.html at <url>
 //                        (exact match, else prefix); its origin may load
 //                        assets from the fixture folder. In harness.json:
 //                        "routes": { "<url>": "<f>" }. For cross-origin
@@ -38,8 +38,8 @@
 //   --headed             show the browser (needs DISPLAY)
 //   --timeout <ms>       per-step timeout (default 20000)
 //
-// What --live does, and all it does, is written up in AGENTS.md → Live check
-// and _workshop/notes/harness.md. It never touches the user's Firefox profile.
+// What --live does, and all it does, is written up in firefox-tools' README
+// (The live check). It never touches the user's Firefox profile.
 
 import fs from 'node:fs';
 import net from 'node:net';
@@ -47,7 +47,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import {
-  GROUP_ROOT, WORKSHOP, ID_SUFFIX, readManifest, treeSha256, extensionPages, exists, findFolder,
+  GROUP_ROOT, TOOLS, PRIVATE_WORKSHOP, ID_SUFFIX, readManifest, treeSha256, extensionPages, exists, findFolder, testsDirOf,
 } from '../tools/lib/extension.mjs';
 import { connectWithRetry, installTemporaryAddon, findAddon, watchAddon, evaluateIn } from './rdp.mjs';
 
@@ -84,13 +84,14 @@ for (let i = 0; i < argv.length; i++) {
   }
 }
 function usage(msg) {
-  console.error(`run.mjs: ${msg}\nusage: node ../_workshop/harness/run.mjs <name> [--spec] [--tests] [--live] [--fixture n] [--url u] [--eval expr]... [--popup-eval expr]... [--screenshot] [--viewport WxH] [--headed]`);
+  console.error(`run.mjs: ${msg}\nusage: node ../firefox-tools/harness/run.mjs <name> [--spec] [--tests] [--live] [--fixture n] [--url u] [--eval expr]... [--popup-eval expr]... [--screenshot] [--viewport WxH] [--headed]`);
   process.exit(2);
 }
 if (!name) usage('extension name required');
 const found = findFolder(name);   // ~/src/firefox/<name>/, or _workshop/<name>/ for a dev tool
-if (!found || found.kind !== 'extension') usage(`no extension repo named ${name} (looked in ${GROUP_ROOT} and ${WORKSHOP})`);
+if (!found || found.kind !== 'extension') usage(`no extension repo named ${name} (looked in ${GROUP_ROOT} and ${PRIVATE_WORKSHOP})`);
 const extDir = found.dir;
+const testsDir = testsDirOf(extDir);
 const parsed = readManifest(extDir);
 if (!parsed.ok) { console.error(`run.mjs: ${parsed.error}`); process.exit(1); }
 const manifest = parsed.manifest;
@@ -99,7 +100,7 @@ const extId = manifest.browser_specific_settings?.gecko?.id ?? `${name}${ID_SUFF
 if (!opts.tests && !opts.live) opts.spec = true;
 let specRel = null;
 if (opts.spec) {
-  const sp = path.join(WORKSHOP, 'review', name, 'harness.json');
+  const sp = path.join(testsDir, 'harness.json');
   specRel = path.relative(GROUP_ROOT, sp);
   if (!exists(sp)) usage(`--spec: ${specRel} does not exist`);
   const spec = JSON.parse(fs.readFileSync(sp, 'utf8'));
@@ -118,7 +119,7 @@ const viewportMatch = /^(\d{2,5})x(\d{2,5})$/.exec(String(opts.viewport));
 if (!viewportMatch) usage('--viewport needs <W>x<H>, e.g. 2560x1314');
 const viewport = { width: Number(viewportMatch[1]), height: Number(viewportMatch[2]) };
 
-const outDir = path.join(WORKSHOP, 'out', name);
+const outDir = path.join(TOOLS, 'out', name);
 fs.mkdirSync(outDir, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const stamp = () => new Date().toISOString().slice(11, 23);
@@ -134,8 +135,7 @@ const result = {
 };
 
 if (opts.tests) {
-  const testsDir = path.join(WORKSHOP, 'tests', name);
-  const harnessDir = path.join(WORKSHOP, 'harness');
+  const harnessDir = path.join(TOOLS, 'harness');
   const files = exists(testsDir) ? fs.readdirSync(testsDir).filter((f) => f.endsWith('.test.mjs') && (!opts.suite || f.includes(opts.suite))).sort() : [];
   const log = [];
   result.tests.ran = true;
@@ -174,14 +174,14 @@ async function live() {
   const fail = (s) => { L.errors.push(s); log(`ERROR ${s}`); };
 
   let playwright;
-  try { playwright = createRequire(path.join(WORKSHOP, 'package.json'))('playwright'); }
-  catch { fail('playwright is not installed; run `npm install` in _workshop/'); return finish(); }
+  try { playwright = createRequire(path.join(TOOLS, 'package.json'))('playwright'); }
+  catch { fail('playwright is not installed; run `npm install --prefix ../firefox-tools`'); return finish(); }
   const { firefox } = playwright;
 
   // fixture
   let fixtureHtml = null;
   let url = opts.url ?? null;
-  const fixtureDir = path.join(WORKSHOP, 'fixtures', name);
+  const fixtureDir = path.join(testsDir, 'fixtures');
   if (opts.fixture) {
     const fp = path.join(fixtureDir, opts.fixture.endsWith('.html') ? opts.fixture : `${opts.fixture}.html`);
     if (!exists(fp)) { fail(`fixture not found: ${path.relative(GROUP_ROOT, fp)}`); return finish(); }

@@ -1,6 +1,6 @@
 // Smoke test: the background script loads under the browser.* shim and
 // answers getState with defaults. Extend with real suites as logic lands.
-import { T, loadScript, makeBrowserShim } from '../../harness/lib.mjs';
+import { T, loadScript, makeBrowserShim } from '../../firefox-tools/harness/lib.mjs';
 
 const shim = makeBrowserShim({ tabs: [{ id: 1, url: 'https://example.com/', active: true }] });
 loadScript(T.extFile('background.js'), { browser: shim.browser });

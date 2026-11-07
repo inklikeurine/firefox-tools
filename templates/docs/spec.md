@@ -57,7 +57,7 @@ Manual checklist (the click-list in the verification report is written from this
 
 ## Release checklist
 
-- Bump `version` in `manifest.json`; add the `CHANGELOG.md` entry.
-- `node ../_workshop/tools/check.mjs __NAME__` clean; `node ../_workshop/harness/run.mjs __NAME__ --spec` passes.
+- In one release pull request: bump `version` in `manifest.json` once for the whole batch, and add the `CHANGELOG.md` entry.
+- `node ../firefox-tools/tools/check.mjs __NAME__` clean; `node ../firefox-tools/harness/run.mjs __NAME__ --spec` passes.
 - Manual checklist in a fresh profile.
 - `web-ext build`; sign on AMO as unlisted.

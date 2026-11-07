@@ -1,15 +1,14 @@
 #!/usr/bin/env node
-// Validator for every mechanical rule in AGENTS.md.
+// Validator for every mechanical rule in an extension's AGENTS.md.
 //
-//   node ../_workshop/tools/check.mjs [--no-journal] [--no-lint] [--quiet] [<name>…]
+//   node ../firefox-tools/tools/check.mjs [--no-lint] [--quiet] [<name>…]
 //
-// Checks every extension repo beside the workshop (~/src/firefox/<name>/) and
-// every dev-tool extension inside it (~/src/firefox/_workshop/<name>/).
+// Checks every extension repo beside firefox-tools (~/src/firefox/<name>/)
+// and, when the maintainer's private workshop is present, every dev-tool
+// extension inside it (~/src/firefox/_workshop/<name>/).
 //
 // Prints one line per finding, "path: rule: message", and exits 1 if any
 // finding is an error. Warnings never fail the run.
-//   --no-journal  skip the "journal has a report for this version" check
-//                 while a change is still in progress
 //   --no-lint     skip `web-ext lint` (slow-ish); never use before declaring done
 //   --quiet       print errors only
 //   <name>        check only these extensions
@@ -19,15 +18,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
-  GROUP_ROOT, WORKSHOP, ID_SUFFIX, MIN_FIREFOX, NAME_RE, VERSION_RE, GECKO_ID_RE, DOC_ENTRIES, REPO_ENTRIES,
-  NOT_EXTENSIONS, exists, isDir, read, rel, discoverFolders, readManifest, manifestReferences, declaredPermissions,
-  extensionPages, htmlReferences, treeSha256, compareVersions, sourceUrl, agentsImport,
+  GROUP_ROOT, TOOLS, ID_SUFFIX, MIN_FIREFOX, NAME_RE, VERSION_RE, GECKO_ID_RE, REPO_ENTRIES,
+  NOT_EXTENSIONS, exists, isDir, read, discoverFolders, readManifest, manifestReferences, declaredPermissions,
+  extensionPages, htmlReferences, compareVersions, sourceUrl, isShippedPath, testsDirOf,
 } from './lib/extension.mjs';
 
 const argv = process.argv.slice(2);
 const flags = new Set(argv.filter((a) => a.startsWith('--')));
 const only = new Set(argv.filter((a) => !a.startsWith('--')));
-const CHECK_JOURNAL = !flags.has('--no-journal');
+// --no-journal is accepted and ignored: the journal is retired (the pull
+// request carries the verification report now).
 const LINT = !flags.has('--no-lint');
 const QUIET = flags.has('--quiet');
 
@@ -78,9 +78,8 @@ const README_SECTIONS = [
 function checkGroup() {
   for (const ent of fs.readdirSync(GROUP_ROOT, { withFileTypes: true })) {
     if (ent.name.startsWith('.') || NOT_EXTENSIONS.has(ent.name)) continue;
-    if (!ent.isDirectory()) warn(ent.name, 'layout', `stray file in ${GROUP_ROOT}; only extension repos and _workshop/ belong here`);
+    if (!ent.isDirectory()) warn(ent.name, 'layout', `stray file in ${GROUP_ROOT}; only extension repos, firefox-tools/ and _workshop/ belong here`);
   }
-  if (!exists(path.join(WORKSHOP, 'README.md'))) warn('_workshop/README.md', 'workspace', 'keep a README in the workshop so the next agent can find things');
 }
 
 function checkRepoFiles(f) {
@@ -90,7 +89,11 @@ function checkRepoFiles(f) {
     if (!exists(at(x))) error(r(x), 'repo-files', 'required file is missing');
   }
   if (!isDir(at('.git'))) error(f.label, 'repo-files', 'not a git repository; every extension is its own repo');
-  if (exists(at('AGENTS.md')) && !read(at('AGENTS.md')).includes(agentsImport(f))) error(r('AGENTS.md'), 'repo-files', `must import the workshop rules with a line reading ${agentsImport(f)}`);
+  if (exists(at('AGENTS.md'))) {
+    const agents = read(at('AGENTS.md'));
+    if (/__(NAME|DISPLAY_NAME|DESCRIPTION|ID)__/.test(agents)) error(r('AGENTS.md'), 'placeholder', 'template placeholder (__X__) left in file');
+    if (!f.devTool && /^@\.\.\/_workshop\/AGENTS\.md\s*$/m.test(agents)) warn(r('AGENTS.md'), 'repo-files', 'old-style AGENTS.md that imports the private workshop; replace it with firefox-tools/templates/repo/AGENTS.md');
+  }
   if (exists(at('CLAUDE.md')) && read(at('CLAUDE.md')).trim() !== '@AGENTS.md') error(r('CLAUDE.md'), 'claude-md', 'must contain exactly "@AGENTS.md"');
   if (exists(at('UNLICENSE'))) {
     const norm = (x) => x.replace(/\r\n/g, '\n').replace(/[ \t]+$/gm, '').trim();
@@ -103,17 +106,19 @@ function checkRepoFiles(f) {
       if (!g.split('\n').some((l) => l.trim() === want)) error(r('.gitignore'), 'gitignore', `must contain the line "${want}"`);
     }
   }
-  if (!exists(at('.claude', 'settings.json'))) error(r('.claude/settings.json'), 'repo-files', 'hook + permissions file is required and committed (copy _workshop/templates/repo/claude-settings.json)');
+  if (!exists(at('.claude', 'settings.json'))) error(r('.claude/settings.json'), 'repo-files', 'hook + permissions file is required and committed (copy firefox-tools/templates/repo/claude-settings.json)');
   else {
     try {
       const st = JSON.parse(read(at('.claude', 'settings.json')));
-      if (!JSON.stringify(st.hooks ?? {}).includes('on-edit.mjs')) error(r('.claude/settings.json'), 'hook', 'PostToolUse hook must run _workshop/tools/on-edit.mjs');
+      if (!JSON.stringify(st.hooks ?? {}).includes('on-edit.mjs')) error(r('.claude/settings.json'), 'hook', 'PostToolUse hook must run firefox-tools/tools/on-edit.mjs');
     } catch (e) { error(r('.claude/settings.json'), 'hook', `not valid JSON: ${e.message}`); }
   }
-  if (!exists(at('.github', 'workflows', 'lint.yml'))) error(r('.github/workflows/lint.yml'), 'ci', 'the web-ext lint workflow is required (copy _workshop/templates/repo/lint.yml)');
-  else if (!/web-ext lint/.test(read(at('.github', 'workflows', 'lint.yml')))) error(r('.github/workflows/lint.yml'), 'ci', 'workflow must run web-ext lint');
+  // CI: the full checks workflow (checks.yml), or the older lint-only one.
+  const ci = ['checks.yml', 'lint.yml'].map((w) => at('.github', 'workflows', w)).find(exists);
+  if (!ci) error(r('.github/workflows/'), 'ci', 'a checks workflow is required (copy firefox-tools/templates/repo/lint.yml)');
+  else if (!/web-ext lint|check\.mjs/.test(read(ci))) error(r(`.github/workflows/${path.basename(ci)}`), 'ci', 'workflow must run web-ext lint or check.mjs');
   for (const x of ['package.json', 'package-lock.json', '.eslintrc', '.eslintrc.json', 'eslint.config.js', '.prettierrc', 'tsconfig.json', 'web-ext-config.js', 'web-ext-config.mjs']) {
-    if (exists(at(x))) error(r(x), 'no-tooling-at-root', 'AGENTS.md forbids build/lint config in an extension repo; tooling lives in _workshop/');
+    if (exists(at(x))) error(r(x), 'no-tooling-at-root', 'AGENTS.md forbids build/lint config in an extension repo; tooling lives in firefox-tools/');
   }
 }
 
@@ -150,7 +155,7 @@ function checkFolderCommon(f) {
     if (!exists(path.join(f.dir, 'docs', 'README.md'))) error(`${f.label}/docs/README.md`, 'layout', 'docs/ needs an index README.md');
     if (!exists(path.join(f.dir, 'docs', 'spec.md'))) error(`${f.label}/docs/spec.md`, 'layout', 'docs/spec.md (the product spec) is required');
   }
-  if (fs.readdirSync(f.dir).includes('agents.md')) error(`${f.label}/agents.md`, 'layout', 'lowercase agents.md is retired; the spec lives in docs/spec.md, the repo\'s AGENTS.md imports the workshop rules');
+  if (fs.readdirSync(f.dir).includes('agents.md')) error(`${f.label}/agents.md`, 'layout', 'lowercase agents.md is retired; the spec lives in docs/spec.md, the rules in AGENTS.md');
 }
 
 function checkSpecFolder(f) {
@@ -183,9 +188,9 @@ function checkExtension(f) {
   else checkChangelog(f, m);
   if (exists(path.join(f.dir, 'README.md'))) checkReadme(f, m);
   if (!isDir(path.join(f.dir, 'icons'))) error(`${f.label}/icons`, 'layout', 'missing icons/ folder');
-  checkVersionBump(f, m);
+  checkTests(f);
+  checkVersion(f, m);
   if (LINT) lint(f);
-  if (CHECK_JOURNAL && m.version) checkJournal(f, m.version);
   return m;
 }
 
@@ -239,7 +244,7 @@ function checkReferencedFiles(f, file, m) {
 }
 
 function checkScripts(f, m) {
-  const files = walkFiles(f.dir).filter((e) => !e.dir && !e.rel.startsWith('docs/'));
+  const files = walkFiles(f.dir).filter((e) => !e.dir && isShippedPath(e.rel));
   for (const e of files) {
     const p = path.join(f.dir, e.rel);
     const prel = `${f.label}/${e.rel}`;
@@ -272,7 +277,7 @@ function checkScripts(f, m) {
 }
 
 function checkHtmlPages(f, m) {
-  const htmlFiles = walkFiles(f.dir).filter((e) => !e.dir && /\.html?$/.test(e.rel) && !e.rel.startsWith('docs/'));
+  const htmlFiles = walkFiles(f.dir).filter((e) => !e.dir && /\.html?$/.test(e.rel) && isShippedPath(e.rel));
   for (const e of htmlFiles) {
     const prel = `${f.label}/${e.rel}`;
     const html = read(path.join(f.dir, e.rel));
@@ -350,48 +355,46 @@ function checkReadme(f, m) {
   if (!/firefox/i.test(md)) error(prel, 'firefox-only', 'must mention Firefox');
 }
 
-// The version is bumped once per release: a change to the shipped tree needs a
-// higher version than the last release, the highest local `v<x.y.z>` tag (the
-// release workflow makes them on GitHub; `git fetch --tags` brings them here).
-// With no release tag yet: the branch's upstream; origin/main for a local
-// branch that was never pushed; HEAD when neither exists.
-// Silently skipped when the folder is new.
-function lastReleaseRef(f) {
-  const tags = spawnSync('git', ['tag', '--list', 'v*'], { cwd: f.dir, encoding: 'utf8' });
-  const releases = (tags.stdout || '').split('\n').map((t) => t.trim()).filter((t) => /^v\d+\.\d+\.\d+$/.test(t));
-  if (releases.length) {
-    const newest = releases.sort((a, b) => compareVersions(a.slice(1), b.slice(1))).pop();
-    return { ref: newest, where: `release ${newest}` };
+// tests/: the suites, the hand-made test pages and the live-check settings.
+// The pull request checks run them; here we only make sure they are there and
+// wired to this layout.
+function checkTests(f) {
+  const t = testsDirOf(f.dir);
+  const tr = `${f.label}/tests`;
+  if (!isDir(t)) { error(tr, 'tests', 'missing tests/ folder (the test suites, test pages and harness.json); start from firefox-tools/templates/smoke.test.mjs'); return; }
+  const suites = fs.readdirSync(t).filter((x) => x.endsWith('.test.mjs'));
+  if (!suites.length) error(tr, 'tests', 'no test suites (tests/*.test.mjs)');
+  for (const x of suites) {
+    const src = read(path.join(t, x));
+    if (/from\s+['"](\.\.\/)+harness\/lib\.mjs['"]/.test(src)) error(`${tr}/${x}`, 'tests', 'imports the old workshop harness; import ../../firefox-tools/harness/lib.mjs');
+    if (/harnessDir,\s*'\.\.',\s*'fixtures'/.test(src)) error(`${tr}/${x}`, 'tests', 'reads test pages from the old workshop; use path.join(T.testsDir, \'fixtures\', …) or T.fixture(…)');
   }
-  for (const ref of ['@{upstream}', 'origin/main']) {
-    const r = spawnSync('git', ['rev-parse', '--verify', '--quiet', ref], { cwd: f.dir, encoding: 'utf8' });
-    if (r.status === 0) return { ref: r.stdout.trim(), where: 'the last push' };
+  const hp = path.join(t, 'harness.json');
+  if (!exists(hp)) { error(`${tr}/harness.json`, 'tests', 'missing live-check settings (copy firefox-tools/templates/harness.json)'); return; }
+  let spec;
+  try { spec = JSON.parse(read(hp)); } catch (e) { error(`${tr}/harness.json`, 'tests', `not valid JSON: ${e.message}`); return; }
+  const pages = [spec.fixture, ...Object.values(spec.routes ?? {})].filter((x) => typeof x === 'string');
+  for (const pg of new Set(pages)) {
+    if (!exists(path.join(t, 'fixtures', `${pg}.html`))) error(`${tr}/harness.json`, 'tests', `names test page "${pg}" but tests/fixtures/${pg}.html does not exist`);
   }
-  return { ref: 'HEAD', where: 'HEAD' };
 }
 
-function checkVersionBump(f, m) {
+// The version is bumped once, in the release pull request, not with each
+// change. All we check here is that it never goes backwards: Firefox never
+// downgrades, and Mozilla signs each version only once. The last release is
+// the highest local `v<x.y.z>` tag (`git fetch --tags` brings them here).
+function checkVersion(f, m) {
   const file = `${f.label}/manifest.json`;
-  const { ref, where } = lastReleaseRef(f);
-  const head = spawnSync('git', ['show', `${ref}:manifest.json`], { cwd: f.dir, encoding: 'utf8' });
-  if (head.status !== 0) {
-    if (m.version && m.version !== '0.1.0') warn(file, 'version', `new extension should start at 0.1.0 (got ${m.version})`);
-    return;
-  }
-  let prev;
-  try { prev = JSON.parse(head.stdout); } catch { return; }
-  if (!prev.version || !m.version) return;
-  const excludes = [...DOC_ENTRIES, ...REPO_ENTRIES].map((d) => `:!${d}`);
-  const diff = spawnSync('git', ['diff', '--quiet', ref, '--', '.', ...excludes], { cwd: f.dir });
-  const untracked = spawnSync('git', ['ls-files', '--others', '--exclude-standard', '--', '.', ...excludes], { cwd: f.dir, encoding: 'utf8' });
-  const changed = diff.status === 1 || untracked.stdout.trim().length > 0;
-  const cmp = compareVersions(m.version, prev.version);
-  if (cmp < 0) error(file, 'version', `version ${m.version} is lower than ${prev.version} in ${where}; Firefox never downgrades`);
-  else if (cmp === 0 && changed) error(file, 'version', `shipped files changed since ${where} but version is still ${m.version}; bump it (PATCH for a fix, MINOR for a feature) and add a CHANGELOG entry`);
+  if (!m.version || !VERSION_RE.test(m.version)) return;
+  const tags = spawnSync('git', ['tag', '--list', 'v*'], { cwd: f.dir, encoding: 'utf8' });
+  const releases = (tags.stdout || '').split('\n').map((x) => x.trim()).filter((x) => /^v\d+\.\d+\.\d+$/.test(x)).map((x) => x.slice(1));
+  if (!releases.length) return;
+  const last = releases.sort(compareVersions).pop();
+  if (compareVersions(m.version, last) < 0) error(file, 'version', `version ${m.version} is lower than the last release, ${last}; Firefox never downgrades`);
 }
 
 function findWebExt() {
-  const local = path.join(WORKSHOP, 'node_modules', '.bin', 'web-ext');
+  const local = path.join(TOOLS, 'node_modules', '.bin', 'web-ext');
   if (exists(local)) return local;
   const which = spawnSync('sh', ['-c', 'command -v web-ext'], { encoding: 'utf8' });
   return which.status === 0 ? which.stdout.trim() : null;
@@ -399,46 +402,14 @@ function findWebExt() {
 
 function lint(f) {
   const bin = findWebExt();
-  if (!bin) { warn(`${f.label}`, 'lint', 'web-ext not found; run `npm install` in _workshop/ (or install it globally). Lint NOT run'); return; }
-  const ignore = [...REPO_ENTRIES].filter((e) => !e.startsWith('.'));   // web-ext already skips dotfiles
+  if (!bin) { warn(`${f.label}`, 'lint', 'web-ext not found; run `npm install --prefix ../firefox-tools` (or install it globally). Lint NOT run'); return; }
+  const ignore = [...[...REPO_ENTRIES].filter((e) => !e.startsWith('.')), 'tests/**'];   // web-ext already skips dotfiles
   const res = spawnSync(bin, ['lint', '--source-dir', f.dir, '--output', 'json', '--warnings-as-errors', '--ignore-files', ...ignore], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   let out;
   try { out = JSON.parse(res.stdout); } catch { error(`${f.label}`, 'lint', `web-ext lint produced no JSON (exit ${res.status}): ${(res.stderr || res.stdout).trim().split('\n').slice(-3).join(' | ')}`); return; }
   for (const it of out.errors ?? []) error(`${f.label}/${it.file ?? 'manifest.json'}`, 'lint', `${it.code}: ${it.message}${it.line ? ` (line ${it.line})` : ''}`);
   for (const it of out.warnings ?? []) error(`${f.label}/${it.file ?? 'manifest.json'}`, 'lint', `${it.code}: ${it.message}${it.line ? ` (line ${it.line})` : ''} [warning; CI treats it as an error]`);
   for (const it of out.notices ?? []) warn(`${f.label}/${it.file ?? 'manifest.json'}`, 'lint', `${it.code}: ${it.message}`);
-}
-
-function checkJournal(f, version) {
-  const jp = path.join(WORKSHOP, 'review', f.name, 'journal.md');
-  const jr = rel(jp);
-  if (!exists(jp)) { error(jr, 'journal', `no verification journal for ${f.name}; run check with --no-journal while iterating`); return; }
-  const md = read(jp);
-  const head = new RegExp(`^## Verification — ${f.name} v${version.replace(/\./g, '\\.')} — \\d{4}-\\d{2}-\\d{2}\\s*$`, 'm');
-  if (!head.test(md)) { error(jr, 'journal', `no "## Verification — ${f.name} v${version} — YYYY-MM-DD" report for the current version`); return; }
-  let start = -1;
-  for (const mm of md.matchAll(new RegExp(head.source, 'gm'))) start = mm.index;
-  const after = md.slice(start);
-  const next = after.slice(1).search(/^## /m);
-  const tail = next < 0 ? after : after.slice(0, next + 1);
-  if (/\[x\]\s*Manual Review/i.test(tail)) warn(jr, 'journal', 'Manual Review is ticked — only a human may tick that');
-  if (!/\[[ x]\]\s*Validated/i.test(tail) || !/\[[ x]\]\s*Automated Test/i.test(tail) || !/\[[ x]\]\s*Manual Review/i.test(tail)) {
-    error(jr, 'journal', 'report is missing one of the three checkboxes (Validated / Automated Test / Manual Review)');
-  }
-  if (!/Not checked/i.test(tail)) error(jr, 'journal', 'report has no "Not checked — please verify" list');
-
-  if (/\[x\]\s*Automated Test/i.test(tail)) {
-    const rp = path.join(WORKSHOP, 'out', f.name, 'result.json');
-    const rr = rel(rp);
-    if (!exists(rp)) { error(jr, 'journal', `Automated Test is ticked but ${rr} does not exist; run the harness (--spec) or untick it`); return; }
-    let r;
-    try { r = JSON.parse(read(rp)); } catch { error(rr, 'journal', 'not valid JSON'); return; }
-    if (r.extension !== f.name) error(jr, 'journal', `Automated Test is ticked but ${rr} is for ${r.extension}, not ${f.name}`);
-    else if (r.version !== version) error(jr, 'journal', `Automated Test is ticked for v${version} but ${rr} is from v${r.version}; re-run the harness`);
-    else if (r.pass !== true) error(jr, 'journal', `Automated Test is ticked but ${rr} says FAIL`);
-    else if (r.treeSha256 !== treeSha256(f.dir)) error(jr, 'journal', `Automated Test is ticked but the shipped files changed since the harness run in ${rr}; re-run it`);
-    else if (!r.tests?.ran || !r.live?.ran) warn(jr, 'journal', `${rr} covers only ${r.tests?.ran ? 'tests' : 'live'}; Automated Test means both — say so in the report`);
-  }
 }
 
 // ---------------------------------------------------------------------------
