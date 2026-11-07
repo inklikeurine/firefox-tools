@@ -16,7 +16,7 @@ AI tools) how to run them first.
 | `tools/check.mjs` | **Validator.** Checks an extension's files, `manifest.json`, README sections, that every `.js` file parses, forbidden code, and runs `web-ext lint` (Mozilla's checker) |
 | `harness/run.mjs` | **Test runner.** Runs an extension's tests without a browser, and a live check that installs it into a hidden Firefox and drives it |
 | `tools/new-extension.mjs` | Creates a new extension repo from the templates |
-| `tools/on-edit.mjs` | Runs the validator after each edit an AI tool makes (a Claude Code hook) |
+| `tools/on-edit.mjs` | Runs the validator after each edit an AI tool makes (a Claude Code hook), without Mozilla's checker, which the full check runs |
 | `templates/` | The starting files for a new extension, including its `AGENTS.md` |
 
 ## Setup

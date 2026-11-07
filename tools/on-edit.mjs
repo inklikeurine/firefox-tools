@@ -36,8 +36,9 @@ if (!names.length && repoFileTouch) {
 names = [...new Set(names)];
 if (!names.length) process.exit(0);
 
-// Lint runs too — the hook has a 60 s budget.
-const args = [path.join(TOOLS, 'tools', 'check.mjs'), '--quiet', ...names];
+// Mozilla's checker (web-ext lint) is left to the full check before pushing
+// and to the pull request checks: here it would triple the wait after every edit.
+const args = [path.join(TOOLS, 'tools', 'check.mjs'), '--quiet', '--no-lint', ...names];
 const res = spawnSync(process.execPath, args, { cwd: TOOLS, encoding: 'utf8' });
 if (res.status === 0) process.exit(0);
 process.stderr.write(`check.mjs found errors after editing:\n${res.stdout}${res.stderr}`);
