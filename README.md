@@ -21,7 +21,7 @@ AI tools) how to run them first.
 
 ## Setup
 
-Needs Node.js 20 or newer. Clone this repository next to the extension
+Needs Node.js 22.22 or newer (jsdom, which the tests run in, requires it). Clone this repository next to the extension
 repositories, so each extension can reach it as `../firefox-tools`:
 
 ```sh
@@ -71,6 +71,13 @@ The maintainer can allow each of those with a label on the pull request:
 | `new-access` | new permissions, pages or web addresses |
 | `rules-changed` | changes to the checks or the AI tools' files |
 | `no-test-needed` | a change to shipped code with no test that fails without it |
+
+## Checks on this repository
+
+A change here changes every extension's checks, so this repository's own
+`checks.yml` runs each public extension's validator, tests and live check
+(against that extension's `main`) with the tools from the pull request.
+Dependabot's updates go through it too: merge one only when it's green.
 
 ## The live check
 

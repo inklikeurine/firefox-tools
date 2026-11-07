@@ -1,0 +1,61 @@
+name: Checks
+
+# A change to these tools changes every extension's checks, so before it
+# lands, every public extension must still pass with it: the validator, the
+# tests and the live check, run against each extension's current main with
+# the tools from this pull request. Dependabot's package updates go through
+# this too.
+#
+# This runs the pull request's code, so it gets no secrets and can't write to
+# any repository. The private Dev Probe isn't included (this workflow can't
+# read private repositories).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  extension:
+    name: ${{ matrix.extension }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false          # one broken extension shouldn't hide the others' results
+      matrix:
+        extension: [cross-store-owned, leanback-for-dropout, volume-boost]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: firefox-tools
+
+      - uses: actions/checkout@v7
+        with:
+          repository: inklikeurine/firefox-${{ matrix.extension }}
+          path: ${{ matrix.extension }}
+          fetch-depth: 0          # history and release tags, for the version check
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Install the tools
+        run: |
+          npm ci --prefix firefox-tools
+          npx --prefix firefox-tools playwright install --with-deps firefox
+
+      - name: Validate
+        working-directory: ${{ matrix.extension }}
+        run: node ../firefox-tools/tools/check.mjs ${{ matrix.extension }}
+
+      - name: Tests and live check
+        working-directory: ${{ matrix.extension }}
+        run: node ../firefox-tools/harness/run.mjs ${{ matrix.extension }} --spec
+
+      - name: Show the test logs
+        if: failure()
+        run: cat firefox-tools/out/${{ matrix.extension }}/*.log 2>/dev/null || true
