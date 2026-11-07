@@ -22,6 +22,8 @@ const [extDir, harnessDir, testsDir] = process.argv.slice(2);
 
 const results = [];
 let pending = Promise.resolve();
+// The pretend clocks of the pages the running test made (makeDom's `clock`).
+const clocks = new Set();
 
 function record(name, ok, msg) {
   results.push({ name, ok, msg });
@@ -36,11 +38,13 @@ export const T = {
 
   run(name, fn) {
     pending = pending.then(() => {
+      clocks.clear();
       try { fn(); record(name, true); } catch (e) { record(name, false, e.message); }
     });
   },
   runAsync(name, fn, ms = 10000) {
     pending = pending.then(async () => {
+      clocks.clear();
       let timer;
       try {
         await Promise.race([fn(), new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`timeout after ${ms} ms`)), ms); })]);
@@ -69,7 +73,8 @@ export const T = {
   close(actual, expected, eps = 1e-6, msg = '') { if (Math.abs(actual - expected) > eps) throw new Error(`${msg}${msg ? ': ' : ''}expected ≈${expected}, got ${actual}`); },
   throws(fn, msg = 'expected a throw') { let threw = false; try { fn(); } catch { threw = true; } if (!threw) throw new Error(msg); },
   async rejects(p, msg = 'expected a rejection') { try { await p; } catch { return; } throw new Error(msg); },
-  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  // On a test page with a pretend clock, moves that clock on instead of waiting.
+  sleep: (ms) => (clocks.size ? Promise.all([...clocks].map((c) => c.tick(ms))) : new Promise((r) => setTimeout(r, ms))),
 
   async exit() {
     await pending;
@@ -322,8 +327,14 @@ export function loadScripts(files, globals = {}) {
  *   const dom = makeDom({ html, url: 'https://watch.example/browse', browser: shim.browser });
  *   dom.runScripts([T.extFile('lib/settings.js'), T.extFile('content/page.js')]);
  *   dom.key('ArrowRight');            // keydown on the active element, bubbles to window
+ *
+ * With `clock: true` the page runs on a pretend clock (below): its timers,
+ * animation frames, Date and performance.now stand still until the test
+ * calls `await dom.clock.tick(ms)`, which runs everything due in that time
+ * at once; T.sleep(ms) does that for every page the running test made. A
+ * three-second wait then takes no time and can't slip on a slow machine.
  */
-export function makeDom({ html = '<!doctype html><html><body></body></html>', url = 'https://page.test/', browser = undefined, viewport = { width: 1280, height: 900 } } = {}) {
+export function makeDom({ html = '<!doctype html><html><body></body></html>', url = 'https://page.test/', browser = undefined, viewport = { width: 1280, height: 900 }, clock = false } = {}) {
   const { JSDOM, VirtualConsole } = createRequire(import.meta.url)('jsdom');
   const notImplemented = [];
   const vc = new VirtualConsole();
@@ -344,6 +355,8 @@ export function makeDom({ html = '<!doctype html><html><body></body></html>', ur
   win.matchMedia = () => ({ matches: false, media: '', addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
   win.scrollBy = () => {};
   if (browser) win.browser = browser;
+  const pretend = clock ? installClock(win) : null;
+  if (pretend) clocks.add(pretend);
   const ctx = dom.getInternalVMContext();
   const runScripts = (files) => { for (const f of [].concat(files)) vm.runInContext(fs.readFileSync(f, 'utf8'), ctx, { filename: f }); return win; };
   const key = (k, init = {}, target = null) => {
@@ -351,5 +364,55 @@ export function makeDom({ html = '<!doctype html><html><body></body></html>', ur
     (target ?? win.document.activeElement ?? win.document.body).dispatchEvent(e);
     return e;
   };
-  return { dom, window: win, document: win.document, runScripts, key, notImplemented, setRect: (el, rect) => el.setAttribute('data-rect', rect.join(',')) };
+  return { dom, window: win, document: win.document, runScripts, key, notImplemented, clock: pretend, setRect: (el, rect) => el.setAttribute('data-rect', rect.join(',')) };
+}
+
+// Replace a window's timers, animation frames, Date and performance.now with
+// a clock that moves only when tick() is called. Between the timers it runs,
+// tick() lets real time take a few turns, so messages through the browser
+// shim (which uses Node's own timers) and promises settle as they would.
+function installClock(win) {
+  const start = Date.now();
+  let now = 0;                       // ms since the page was made
+  let seq = 0;
+  const timers = new Map();          // id -> { at, fn, args, every }
+  const add = (fn, ms, args, every) => {
+    const id = ++seq;
+    const delay = Math.max(0, Number(ms) || 0);
+    timers.set(id, { at: now + delay, fn, args, every: every ? Math.max(1, delay) : 0, order: id });
+    return id;
+  };
+  win.setTimeout = (fn, ms, ...args) => add(fn, ms, args, false);
+  win.setInterval = (fn, ms, ...args) => add(fn, ms, args, true);
+  win.clearTimeout = win.clearInterval = (id) => { timers.delete(id); };
+  win.requestAnimationFrame = (fn) => add(() => fn(start + now), 16, [], false);
+  win.cancelAnimationFrame = (id) => { timers.delete(id); };
+  const RealDate = win.Date;
+  class PretendDate extends RealDate {
+    constructor(...a) { if (a.length) super(...a); else super(start + now); }
+    static now() { return start + now; }
+  }
+  win.Date = PretendDate;
+  Object.defineProperty(win.performance, 'now', { value: () => 1000 + now, configurable: true, writable: true });
+  const realTurns = async (n = 4) => { for (let i = 0; i < n; i += 1) await new Promise((r) => setTimeout(r, 0)); };
+  return {
+    get now() { return now; },
+    /** Move the clock on by `ms`, running every timer and frame due, in order. */
+    async tick(ms = 0) {
+      const target = now + Math.max(0, ms);
+      await realTurns();
+      for (;;) {
+        let next = null;
+        for (const [id, t] of timers) if (t.at <= target && (!next || t.at < next[1].at || (t.at === next[1].at && t.order < next[1].order))) next = [id, t];
+        if (!next) break;
+        const [id, t] = next;
+        now = Math.max(now, t.at);
+        if (t.every) { t.at = now + t.every; t.order = ++seq; } else timers.delete(id);
+        try { t.fn(...t.args); } catch (e) { win.console.error(e); }
+        await new Promise((r) => setImmediate(r));
+      }
+      now = target;
+      await realTurns();
+    },
+  };
 }
