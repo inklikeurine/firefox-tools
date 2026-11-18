@@ -76,6 +76,7 @@ copy('repo/gitignore', path.join(dir, '.gitignore'), { skipIfExists: promote });
 copy('repo/claude-settings.json', path.join(dir, '.claude', 'settings.json'), { skipIfExists: promote });
 copy('repo/checks.yml', path.join(dir, '.github', 'workflows', 'checks.yml'), { skipIfExists: promote });
 copy('repo/guards.yml', path.join(dir, '.github', 'workflows', 'guards.yml'), { skipIfExists: promote });
+copy('repo/report.yml', path.join(dir, '.github', 'workflows', 'report.yml'), { skipIfExists: promote });
 copy('repo/pull_request_template.md', path.join(dir, '.github', 'pull_request_template.md'), { skipIfExists: promote });
 copy('UNLICENSE', path.join(dir, 'UNLICENSE'), { skipIfExists: promote });
 if (!exists(path.join(dir, '.git'))) {

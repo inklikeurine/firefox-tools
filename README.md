@@ -50,7 +50,7 @@ checks `../volume-boost/`.
 
 ## Pull request checks
 
-Each extension has two workflows, copied from `templates/repo/`:
+Each extension has three workflows, copied from `templates/repo/`:
 
 - **`checks.yml`: Validate and test.** Runs the validator, the tests and the
   live check on every push to `main` and every pull request. On a pull
@@ -62,6 +62,12 @@ Each extension has two workflows, copied from `templates/repo/`:
   can't edit it away. It fails when a pull request edits or removes an
   existing test, adds a permission, a page the extension runs on or a web
   address, or changes `.github/`, `.claude/`, `AGENTS.md` or `CLAUDE.md`.
+- **`report.yml`: Report.** When the checks or the guards finish on a pull
+  request, it posts what they found in plain words (`tools/pr-report.mjs`,
+  which the other two run and save) as a comment on the pull request: one
+  for the checks and one for the guards, updated on every run. A pull request
+  that passes first time gets no comment. It never runs the pull request's
+  code.
 
 The maintainer can allow each of those with a label on the pull request:
 

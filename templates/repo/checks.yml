@@ -41,26 +41,58 @@ jobs:
           node-version: 22
 
       - name: Install the shared tools
+        id: setup
         run: |
           npm ci --prefix firefox-tools
           npx --prefix firefox-tools playwright install --with-deps firefox
 
+      # Each check runs even when the one before failed, so one run reports
+      # everything; each keeps its output for the report.
       - name: Validate
+        id: validate
         working-directory: __NAME__
-        run: node ../firefox-tools/tools/check.mjs __NAME__
+        run: |
+          mkdir -p ../firefox-tools/out/__NAME__
+          node ../firefox-tools/tools/check.mjs __NAME__ 2>&1 | tee ../firefox-tools/out/__NAME__/check.log
 
       - name: Tests and live check
+        id: tests
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         working-directory: __NAME__
         run: node ../firefox-tools/harness/run.mjs __NAME__ --spec
 
       - name: New tests fail without the change
-        if: github.event_name == 'pull_request'
+        id: failfirst
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && github.event_name == 'pull_request' }}
         working-directory: __NAME__
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
-        run: node ../firefox-tools/tools/fail-first.mjs __NAME__ "$BASE_SHA"
+        run: node ../firefox-tools/tools/fail-first.mjs __NAME__ "$BASE_SHA" 2>&1 | tee ../firefox-tools/out/__NAME__/fail-first.log
 
       - name: Show the test logs
         if: failure()
         run: cat firefox-tools/out/__NAME__/*.log 2>/dev/null || true
+
+      # What failed, in plain words, for report.yml to post on the pull
+      # request (this workflow can't write to it: it runs the pull request's
+      # code).
+      - name: Write the report
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        working-directory: __NAME__
+        env:
+          OUTCOME_SETUP: ${{ steps.setup.outcome }}
+          OUTCOME_VALIDATE: ${{ steps.validate.outcome }}
+          OUTCOME_TESTS: ${{ steps.tests.outcome }}
+          OUTCOME_FAILFIRST: ${{ steps.failfirst.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node ../firefox-tools/tools/pr-report.mjs __NAME__ checks || true
+
+      - name: Keep the report
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr-report
+          path: firefox-tools/out/__NAME__/report/
+          if-no-files-found: ignore
+          retention-days: 7
