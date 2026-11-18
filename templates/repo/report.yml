@@ -1,0 +1,58 @@
+name: Report
+
+# After the checks or the guards finish on a pull request, post what they
+# found, in plain words, as a comment on it: one comment for the checks and
+# one for the guards, each updated on every run. A pull request that passes
+# first time gets no comment; one that had a failing comment gets it updated
+# to "all passed".
+#
+# The checks run the pull request's code, so they can't write to it; they
+# save their report (tools/pr-report.mjs) and this workflow, which runs as it
+# is on main and never runs the pull request's code, posts it. The pull
+# request is found from the run's commit, not from anything in the report.
+
+on:
+  workflow_run:
+    workflows: [Checks, Guards]
+    types: [completed]
+
+permissions:
+  actions: read
+  pull-requests: write
+
+jobs:
+  report:
+    name: Post the report
+    if: github.event.workflow_run.event == 'pull_request' || github.event.workflow_run.event == 'pull_request_target'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Post or update the comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          WORKFLOW: ${{ github.event.workflow_run.name }}
+        run: |
+          set -euo pipefail
+          if ! gh run download "$RUN_ID" --repo "$REPO" --name pr-report --dir report; then
+            echo "This run left no report."; exit 0
+          fi
+          pr=$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" --jq '[.[] | select(.state == "open")][0].number // empty')
+          if [ -z "$pr" ]; then echo "No open pull request for $HEAD_SHA."; exit 0; fi
+          marker="<!-- firefox-tools report: $WORKFLOW -->"
+          status=$(cat report/status 2>/dev/null || echo FAIL)
+          # The report is text from the run: capped, and any @ can't notify.
+          printf '%s\n%s' "$marker" "$(head -c 60000 report/report.md | sed 's/@/@\xe2\x80\x8b/g')" > body.md
+          id=$(gh api "repos/$REPO/issues/$pr/comments" --paginate \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" | tail -n 1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -F body=@body.md > /dev/null
+            echo "Updated the comment on #$pr."
+          elif [ "$status" = "FAIL" ]; then
+            gh api "repos/$REPO/issues/$pr/comments" -F body=@body.md > /dev/null
+            echo "Commented on #$pr."
+          else
+            echo "All passed and nothing to update: no comment."
+          fi

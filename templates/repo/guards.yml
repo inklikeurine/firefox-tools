@@ -42,9 +42,31 @@ jobs:
 
       # No npm install: the guard script has no dependencies.
       - name: Check what the pull request changes
+        id: guards
         working-directory: __NAME__
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-        run: node ../firefox-tools/tools/pr-guards.mjs "$BASE_SHA"
+        run: |
+          mkdir -p ../firefox-tools/out/__NAME__
+          node ../firefox-tools/tools/pr-guards.mjs "$BASE_SHA" 2>&1 | tee ../firefox-tools/out/__NAME__/guards.log
+
+      # What the guards said, for report.yml to post on the pull request.
+      # pr-report.mjs only reads the guards' output, never the pull request.
+      - name: Write the report
+        if: ${{ !cancelled() }}
+        working-directory: __NAME__
+        env:
+          OUTCOME_GUARDS: ${{ steps.guards.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node ../firefox-tools/tools/pr-report.mjs __NAME__ guards || true
+
+      - name: Keep the report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr-report
+          path: firefox-tools/out/__NAME__/report/
+          if-no-files-found: ignore
+          retention-days: 7
